@@ -1,0 +1,17 @@
+## Artifacts
+*.DS_Store*
+*.pyc
+*__pycache__*
+*.vscode*
+*.egg-info*
+
+## Data
+data/*/
+!data/README.md
+
+## Plots
+plots/*/
+!plots/README.md
+
+## Documentation
+documentation/final.*

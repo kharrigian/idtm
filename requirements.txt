@@ -1,0 +1,11 @@
+numpy
+scipy
+pandas
+matplotlib
+tqdm
+scikit-learn
+emoji
+nltk
+gensim
+python-Levenshtein
+tomotopy
