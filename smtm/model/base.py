@@ -13,6 +13,7 @@ import sys
 from datetime import datetime
 
 ## External Libraries
+import joblib
 from tqdm import tqdm
 from tomotopy.utils import Corpus
 from scipy import sparse
@@ -114,15 +115,21 @@ class TopicModel(object):
         raise NotImplementedError()
     
     def save(self,
-             filename):
+             filename,
+             **kwargs):
         """
 
         """
-        raise NotImplementedError()
-    
-    def load(self,
-             filename):
+        if not filename.endswith(".joblib"):
+            filename = f"{filename}.joblib"
+        _ = joblib.dump(self, filename, **kwargs)
+
+    @staticmethod
+    def load(filename):
         """
 
         """
-        raise NotImplementedError()
+        if not os.path.exists(filename):
+            raise FileNotFoundError(f"Model file not found: {filename}")
+        model = joblib.load(filename)
+        return model
