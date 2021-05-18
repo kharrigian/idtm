@@ -1,6 +1,7 @@
 numpy
 scipy
 pandas
+joblib
 matplotlib
 tqdm
 scikit-learn
