@@ -113,9 +113,10 @@ class BaseTomotopy(TopicModel):
             data = np.stack([p[1] for p in param_cache])
         if dimension is not None and len(data.shape) > 2:
             data = data[:,dimension,:]
-        if top_k is not None and data.shape[1] > top_k:
-            top_k_i = np.argsort(data.mean(axis=0))[-top_k:]
-            data = data[:, top_k_i]
+        if top_k is not None:
+            if len(data.shape) > 1 and data.shape[1] > top_k:
+                top_k_i = np.argsort(data.mean(axis=0))[-top_k:]
+                data = data[:, top_k_i]
         ## Plot Figure
         if fig is None or ax is None:
             fig, ax = plt.subplots(figsize=(10,5.8))

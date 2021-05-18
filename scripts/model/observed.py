@@ -7,6 +7,9 @@ Real Data Modeling
 ### Configuration
 #####################
 
+## Experiment Output Directory
+OUTPUT_DIR = "./data/results/observed/dtm/"
+
 ## Data
 DATA_DIR = "./data/processed/depression/"
 DATA_TYPE = "comments"
@@ -19,27 +22,37 @@ MIN_VOCAB_CF = 100
 MIN_WORDS_PER_DOCUMENT = 25
 
 ## Topic Model Parameters
-MODEL_TYPE = "lda"
+MODEL_TYPE = "dtm"
 MODEL_PARAMS = {
-    "alpha":0.01,
-    "eta":0.01,
-    "k":100,
-    "n_iter":1000,
+
+    # "alpha":0.1,
+    # "eta":0.1,
+
+    "alpha_var":0.1,
+    "eta_var":0.1,
+    "phi_var":0.1,
+
+    "rm_top":500,
+    "k":10,
+    "n_iter":50000,
     "n_burn":100,
-    "cache_rate":10,
-    "cache_params":set(["phi","alpha"]),
+    "cache_rate":100,
+    "cache_params":set(["phi","alpha","theta"]),
     "jobs":8,
     "verbose":True,
     "seed":42,
 }
 
 ## Aggregation into Epochs
-AGG_RATE = "1W"
+AGG_RATE = "3MO"
 
 ## Script Meta Parameters
 NUM_JOBS = 8
 RANDOM_SEED = 42
-SAMPLE_RATE = None
+SAMPLE_RATE = 0.1
+N_DOC_TOPIC_PLOTS = 30
+MAX_PLOT_TOPICS = 10
+MAX_PLOT_TERMS = 50
 
 #####################
 ### Imports
@@ -54,11 +67,13 @@ from datetime import datetime
 ## External Libraries
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 from scipy import sparse
 import matplotlib.pyplot as plt
 
 ## Local
-from smtm.model import LDA, HDP, DTM
+from smtm.model import LDA, HDP, DTM, IDTM
+from smtm.util.helpers import make_directory
 
 #####################
 ### Globals
@@ -68,8 +83,12 @@ from smtm.model import LDA, HDP, DTM
 MODELS = {
     "lda":LDA,
     "hdp":HDP,
-    "dtm":DTM
+    "dtm":DTM,
+    "idtm":IDTM
 }
+
+## Output Directory
+_ = make_directory(OUTPUT_DIR)
 
 #####################
 ### Helpers
@@ -206,7 +225,9 @@ def filter_vocabulary(X, vocabulary):
     """
     df_mask = ((X!=0).sum(axis=0) >= MIN_VOCAB_DF).A[0]
     cf_mask = (X.sum(axis=0) >= MIN_VOCAB_CF).A[0]
+    min_len_mask = [i for i, v in enumerate(vocabulary) if len(v) > 0 and (len(v) > 1 or not v.isalpha())] 
     mask = np.logical_and(cf_mask, df_mask).nonzero()[0]
+    mask = sorted(set(mask) & set(min_len_mask))
     X = X[:,mask]
     vocabulary = [vocabulary[v] for v in mask]
     return X, vocabulary
@@ -223,46 +244,16 @@ def filter_documents(X,
     min_date_dt = int(datetime.strptime(MIN_DATE, "%Y-%m-%d").timestamp())
     max_date_dt = int(datetime.strptime(MAX_DATE, "%Y-%m-%d").timestamp())
     time_mask = [i for i, (l,u) in enumerate(timestamps) if l >= min_date_dt and u < max_date_dt]
+    ## Sample Mask
+    sample_mask = list(range(X.shape[0]))
+    if SAMPLE_RATE is not None:
+        sample_mask = (np.random.uniform(0,1,X.shape[0]) <= SAMPLE_RATE).nonzero()[0]
     ## Mask
-    mask = sorted(set(freq_mask) & set(time_mask))
+    mask = sorted(set(freq_mask) & set(time_mask) & set(sample_mask))
     X = X[mask]
     post_ids = [post_ids[m] for m in mask]
     timestamps = timestamps[mask]
     return X, post_ids, timestamps
-
-def plot_trace(model,
-               parameter,
-               dimension=None,
-               top_k=50):
-    """
-
-    """
-    ## Extract
-    param_cache = getattr(model, f"_{parameter}", None)
-    if param_cache is None:
-        return None
-    ## Prepare for Plotting
-    epochs = [p[0] for p in param_cache]
-    data = np.stack([p[1] for p in param_cache])
-    if dimension is not None and len(data.shape) > 2:
-        data = data[:,dimension,:]
-    if top_k is not None and data.shape[1] > top_k:
-        top_k_i = np.argsort(data.mean(axis=0))[-top_k:]
-        data = data[:, top_k_i]
-    ## Plot Figure
-    fig, ax = plt.subplots(figsize=(10,5.8))
-    for d, l in enumerate(data.T):
-        ax.plot(epochs, l, alpha=0.4)
-    if np.min(data) > 0:
-        ax.set_ylim(0)
-    ax.set_xlim(0, max(epochs))
-    ax.spines["right"].set_visible(False)
-    ax.spines["top"].set_visible(False)
-    ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
-    ax.set_ylabel("Parameter", fontweight="bold", fontsize=14)
-    ax.tick_params(labelsize=12)
-    fig.tight_layout()
-    return fig, ax
 
 def get_topic_proportions(model,
                           timestamps_assigned,
@@ -351,6 +342,75 @@ def plot_proportions_stacked(theta_df_agg,
     fig.autofmt_xdate()
     return fig, ax
 
+def plot_traces(model,
+                random_seed=42):
+    """
+
+    """
+    ## Set Random Seed
+    _ = np.random.seed(random_seed)
+    ## Model Awareness
+    is_dynamic = isinstance(model, DTM) or isinstance(model, IDTM)
+    n_plot_topics = min(MAX_PLOT_TOPICS, model.theta.shape[1])
+    n_plot_terms = min(MAX_PLOT_TERMS, len(model.model.used_vocabs))
+    n_dims = model.phi.shape[1] if is_dynamic else model.phi.shape[0]
+    ## Get Epochs and Params
+    trace_epochs = [None] if not is_dynamic else range(model.phi.shape[0])
+    trace_params = model.cache_params
+    ## Directory Setup Or Early Exit
+    if len(trace_params) > 0:
+        _ = make_directory(f"{OUTPUT_DIR}plots/trace/", remove_existing=True)
+    else:
+        return None
+    ## Document Traces
+    if "theta" in trace_params:
+        doc_ids = np.random.choice(model.theta.shape[0],
+                                   min(N_DOC_TOPIC_PLOTS, n_dims),
+                                   replace=False)
+        for doc_id in tqdm(doc_ids, desc="Document-Topic Trace Plots", file=sys.stdout):
+            figure = model.plot_document_trace(doc_id, n_plot_topics)
+            if figure is not None:
+                figure[0].savefig(f"{OUTPUT_DIR}plots/trace/theta_{doc_id}.png", dpi=100)
+                plt.close(figure[0])
+    ## Alpha and Phi Traces
+    for epoch in tqdm(trace_epochs, desc="Alpha and Phi Trace Plots", file=sys.stdout):
+        epoch_name = epoch if epoch is not None else "all"
+        if "alpha" not in trace_params and "phi" not in trace_params:
+            continue
+        if "alpha" in trace_params:
+            figure = model.plot_alpha_trace(epoch=epoch,
+                                            top_k_topics=n_plot_topics)
+            if figure is not None:
+                figure[0].savefig(f"{OUTPUT_DIR}plots/trace/alpha_{epoch_name}.png", dpi=100)
+                plt.close(figure[0])
+        if "phi" in trace_params:
+            for kdim in range(n_dims):
+                figure = model.plot_topic_trace(topic_id=kdim,
+                                                epoch=epoch,
+                                                top_k_terms=n_plot_terms)
+                if figure is not None:
+                    figure[0].savefig(f"{OUTPUT_DIR}plots/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
+                    plt.close(figure[0])
+
+def plot_topic_evolution(model):
+    """
+
+    """
+    ## Number of Terms to Plot
+    n_plot_terms = min(MAX_PLOT_TERMS, len(model.vocabulary))
+    ## Get Epochs and Params
+    is_dynamic = isinstance(model, DTM) or isinstance(model, IDTM)
+    n_dims = model.phi.shape[1] if is_dynamic else model.phi.shape[0]
+    topic_dims = range(n_dims)
+    ## Directory
+    _ = make_directory(f"{OUTPUT_DIR}plots/topic_evolution/", remove_existing=True)
+    ## Generate Figures
+    for kdim in tqdm(topic_dims, desc="Topic Evolution Plots", file=sys.stdout):
+        figure = model.plot_topic_evolution(kdim, n_plot_terms)
+        if figure is not None:
+            figure[0].savefig(f"{OUTPUT_DIR}plots/topic_evolution/{kdim}.png", dpi=100)
+            plt.close(figure[0])
+
 def main():
     """
 
@@ -365,12 +425,37 @@ def main():
     time_bins = get_time_bins(AGG_RATE, MIN_DATE)
     time_bins_dt = [datetime.fromtimestamp(d[0]).date() for d in time_bins]
     timestamps_assigned = batch_time_bin_assign(timestamps, time_bins)
-    ## Initialize Model
+    ## Re-index Bins By Minimum
+    tb_min = min(timestamps_assigned)
+    timestamps_assigned = [t - tb_min for t in timestamps_assigned]
+    time_bins = time_bins[tb_min:]
+    time_bins_dt = time_bins_dt[tb_min:]
+    ## Initialize Model and Parameters
+    dynamic_model = MODEL_TYPE in set(["dtm","idtm"])
     MODEL_PARAMS["vocabulary"] = vocabulary
+    if MODEL_TYPE in set(["dtm","idtm"]):
+        MODEL_PARAMS["t"] = max(timestamps_assigned) + 1
     model = MODELS.get(MODEL_TYPE)(**MODEL_PARAMS)
     ## Fit Model
     fit_kwargs = {}
-    if MODEL_TYPE in set(["dtm","idtm"]):
-        fit_kwargs.update({"label":timestamps_assigned,"labels_key":"timepoint"})
+    if dynamic_model:
+        fit_kwargs.update({"labels":timestamps_assigned,"labels_key":"timepoint"})
     model = model.fit(X, **fit_kwargs)
-    ## Extract Inferences
+    ## Save Model
+    _ = model.save(f"{OUTPUT_DIR}topic_model.joblib")
+    ## Save Model Summary
+    _ = model.summary(topic_word_top_n=15, file=open(f"{OUTPUT_DIR}topic_model.summary","w"))
+    ## Trace Plots
+    _ = plot_traces(model, RANDOM_SEED)
+    ## Topic Evolution Plots
+    if dynamic_model:
+        _ = plot_topic_evolution(model)
+    print("Script Complete!")
+
+#####################
+### Execution
+#####################
+
+if __name__ == "__main__":
+    _ = main()
+
