@@ -28,16 +28,16 @@ MODEL_PARAMS = {
     # "alpha":0.1,
     # "eta":0.1,
 
-    "alpha_var":0.1,
-    "eta_var":0.1,
-    "phi_var":0.1,
+    "alpha_var":0.001,
+    "eta_var":0.001,
+    "phi_var":0.001,
 
-    "rm_top":500,
-    "k":10,
-    "n_iter":50000,
+    "rm_top":100,
+    "k":50,
+    "n_iter":25000,
     "n_burn":100,
-    "cache_rate":100,
-    "cache_params":set(["phi","alpha","theta"]),
+    "cache_rate":10,
+    "cache_params":set(["phi","alpha"]),
     "jobs":8,
     "verbose":True,
     "seed":42,
@@ -73,7 +73,7 @@ import matplotlib.pyplot as plt
 
 ## Local
 from smtm.model import LDA, HDP, DTM, IDTM
-from smtm.util.helpers import make_directory
+from smtm.util.helpers import make_directory, chunks
 
 #####################
 ### Globals
@@ -255,17 +255,11 @@ def filter_documents(X,
     timestamps = timestamps[mask]
     return X, post_ids, timestamps
 
-def get_topic_proportions(model,
-                          timestamps_assigned,
-                          time_bins_dt,
-                          use_argmax=False,):
+def _compute_topic_proportion(theta_df,
+                              use_argmax=False):
     """
 
     """
-    ## Generate DataFrame
-    theta_df = pd.DataFrame(np.hstack([np.array(timestamps_assigned).reshape(-1,1), model.theta]))
-    theta_df[0] = theta_df[0].astype(int)
-    ## Aggregate over Time
     if use_argmax:
         theta_df_argmax = theta_df[theta_df.columns[1:]].idxmax(axis=1).to_frame("argmax")
         theta_df_argmax = pd.merge(theta_df[[0]],
@@ -279,25 +273,81 @@ def get_topic_proportions(model,
     else:
         theta_df_agg = theta_df.groupby([0]).mean()
     theta_df_agg = theta_df_agg.apply(lambda i: i / sum(i), axis=1)
-    theta_df_agg.index = theta_df_agg.index.map(lambda i: time_bins_dt[i])
     return theta_df_agg
 
-def plot_proportions_line(theta_df_agg,
-                          components,
-                          top_k=25):
+def get_topic_proportions(model,
+                          timestamps_assigned,
+                          time_bins_dt,
+                          use_argmax=False,
+                          n_bootstrap=100,
+                          alpha=0.05,
+                          random_seed=42):
     """
 
     """
+    ## Set Random Seed
+    _ = np.random.seed(random_seed)
+    ## Generate DataFrame
+    theta_df = pd.DataFrame(np.hstack([np.array(timestamps_assigned).reshape(-1,1), model.theta]))
+    theta_df[0] = theta_df[0].astype(int)
+    ## Baseline Statistics
+    theta_agg_q = _compute_topic_proportion(theta_df, use_argmax)
+    ## Bootstrap Statistics
+    agg_cache = []
+    for _ in tqdm(range(n_bootstrap), desc="Proportion Bootstrap", file=sys.stdout):
+        theta_df_boot = theta_df.sample(n=theta_df.shape[0], replace=True)
+        theta_df_boot_agg = _compute_topic_proportion(theta_df_boot, use_argmax)
+        theta_df_boot_agg = theta_df_boot_agg.reindex(theta_agg_q.index)
+        agg_cache.append((theta_agg_q - theta_df_boot_agg).values)
+    agg_cache = np.stack(agg_cache)
+    ## Summarize
+    q_l, q_u = np.nanpercentile(agg_cache, q=[alpha/2 * 100, 100 - alpha/2 * 100], axis=0)
+    q_l = theta_agg_q + pd.DataFrame(q_l, index=theta_agg_q.index, columns=theta_agg_q.columns)
+    q_u = theta_agg_q + pd.DataFrame(q_u, index=theta_agg_q.index, columns=theta_agg_q.columns)
+    ## Update Index
+    for df in [theta_agg_q, q_l, q_u]:
+        df.index = df.index.map(lambda i: time_bins_dt[i])
+    return theta_agg_q, q_l, q_u
+
+def plot_proportions_line(prop_mu,
+                          prop_ci=None,
+                          components=None):
+    """
+    Args:
+        prop_mu (pandas DataFrame): Average Proportions
+        prop_ci (tuple or None): Lower and Upper Proportion Bounds
+        components (list or None): Specific Components to Plot
+    """
+    ## Component Check
+    if components is None:
+        components = prop_mu.columns.tolist()
+    if prop_ci is not None:
+        assert len(prop_ci) == 2
+        prop_low, prop_high = prop_ci
+        prop_low_diff = prop_mu - prop_low
+        prop_high_diff = prop_high - prop_mu
     ## Generate Plot
     fig, ax = plt.subplots(figsize=(10,5.8))
     for i, k in enumerate(components):
-        ax.plot(theta_df_agg.index,
-                theta_df_agg[k].values,
-                alpha=0.5,
-                linewidth=3,
-                color=f"C{i}",
-                label=k)
-    ax.set_xlim(theta_df_agg.index.min(), theta_df_agg.index.max())
+        if prop_ci is None:
+            ax.plot(prop_mu.index,
+                    prop_mu[k].values,
+                    alpha=0.5,
+                    marker="o",
+                    linewidth=3,
+                    color=f"C{i}",
+                    label=k)
+        else:
+            ax.errorbar(prop_mu.index,
+                        prop_mu[k].values,
+                        yerr=np.vstack([prop_low_diff[k].values, prop_high_diff[k].values]),
+                        marker="o",
+                        alpha=0.5,
+                        linewidth=3,
+                        color=f"C{i}",
+                        capsize=5,
+                        label=k)
+    ax.set_xlim(prop_mu.index.min(), prop_mu.index.max())
     ax.set_ylim(0)
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
@@ -309,29 +359,30 @@ def plot_proportions_line(theta_df_agg,
     fig.tight_layout()
     return fig, ax
 
-def plot_proportions_stacked(theta_df_agg,
-                             top_k=25):
+def plot_proportions_stacked(prop_mu,
+                             components=None):
     """
 
     """
-    ## Get Components to Plot
-    top_k_components = sorted(theta_df_agg.sum(axis=0).nlargest(top_k).index.tolist())
+    ## Check Components
+    if components is None:
+        components = prop_mu.columns.tolist()
     ## Generate Plot
     fig, ax = plt.subplots(figsize=(10,5.8))
-    lower = np.zeros(theta_df_agg.shape[0])
-    for k in top_k_components:
-        ax.fill_between(theta_df_agg.index,
+    lower = np.zeros(prop_mu.shape[0])
+    for k in components:
+        ax.fill_between(prop_mu.index,
                         lower,
-                        lower + theta_df_agg[k].values,
+                        lower + prop_mu[k].values,
                         alpha=0.5,
                         label=k)
-        lower += theta_df_agg[k].values
-    ax.fill_between(theta_df_agg.index,
+        lower += prop_mu[k].values
+    ax.fill_between(prop_mu.index,
                     lower,
-                    np.ones(theta_df_agg.shape[0]),
+                    np.ones(prop_mu.shape[0]),
                     alpha=0.5,
                     label="Other")
-    ax.set_xlim(theta_df_agg.index.min(), theta_df_agg.index.max())
+    ax.set_xlim(prop_mu.index.min(), prop_mu.index.max())
     ax.set_ylim(0, round(max(lower), 2) + 0.01)
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
@@ -411,6 +462,32 @@ def plot_topic_evolution(model):
             figure[0].savefig(f"{OUTPUT_DIR}plots/topic_evolution/{kdim}.png", dpi=100)
             plt.close(figure[0])
 
+def extract_dynamic_topic_summary(model,
+                                  time_bins_dt,
+                                  top_k=10):
+    """
+
+    """
+    ## Format Time Bins
+    time_bins_dt_iso = [t.isoformat() for t in time_bins_dt]
+    ## Extract
+    component_terms = []
+    for c in range(model.phi.shape[1]):
+        c_sort = model.phi[:,c,:].argsort(axis=1)[:,-top_k:][:,::-1]
+        c_sort = [[model.model.used_vocabs[i] for i in c] for c in c_sort]
+        c_sort_overall = model.phi[:,c,:].mean(axis=0).argsort()[-top_k * 2:][::-1]
+        c_sort_overall = [model.model.used_vocabs[i] for i in c_sort_overall]
+        component_terms.append((c_sort_overall, pd.DataFrame(c_sort, index=time_bins_dt_iso).T))
+    ## Format
+    output_str = ""
+    for c, cdata in enumerate(component_terms):
+        c_str = "~"*50 + f" Topic {c} " + "~"*50 + "\n"
+        c_str += "Overall: {}\n\n".format(", ".join(cdata[0]))
+        c_str += "Change Over Time:\n"
+        c_str += cdata[1].to_string(index=False)
+        output_str += f"\n{c_str}\n"
+    return output_str
+
 def main():
     """
 
@@ -427,9 +504,10 @@ def main():
     timestamps_assigned = batch_time_bin_assign(timestamps, time_bins)
     ## Re-index Bins By Minimum
     tb_min = min(timestamps_assigned)
+    tb_max = max(timestamps_assigned)
     timestamps_assigned = [t - tb_min for t in timestamps_assigned]
-    time_bins = time_bins[tb_min:]
-    time_bins_dt = time_bins_dt[tb_min:]
+    time_bins = time_bins[tb_min:tb_max+1]
+    time_bins_dt = time_bins_dt[tb_min:tb_max+1]
     ## Initialize Model and Parameters
     dynamic_model = MODEL_TYPE in set(["dtm","idtm"])
     MODEL_PARAMS["vocabulary"] = vocabulary
@@ -444,12 +522,40 @@ def main():
     ## Save Model
     _ = model.save(f"{OUTPUT_DIR}topic_model.joblib")
     ## Save Model Summary
-    _ = model.summary(topic_word_top_n=15, file=open(f"{OUTPUT_DIR}topic_model.summary","w"))
+    _ = model.summary(topic_word_top_n=15, file=open(f"{OUTPUT_DIR}topic_model.summary.txt","w"))
     ## Trace Plots
     _ = plot_traces(model, RANDOM_SEED)
-    ## Topic Evolution Plots
+    ## Topic Evolution
     if dynamic_model:
+        ## Plots
         _ = plot_topic_evolution(model)
+        ## Summarization
+        topic_summary = extract_dynamic_topic_summary(model, time_bins_dt, 10)
+        with open(f"{OUTPUT_DIR}topic_model.dynamic.summary.txt","w") as the_file:
+            the_file.write(topic_summary)
+    ## Extract Topic Proportions over Time
+    prop_mu, prop_low, prop_high = get_topic_proportions(model,
+                                                         timestamps_assigned,
+                                                         time_bins_dt,
+                                                         n_bootstrap=100,
+                                                         alpha=0.05,
+                                                         use_argmax=False)
+    ## Cache Proportions
+    _ = prop_mu.to_csv(f"{OUTPUT_DIR}proportions.csv")
+    _ = prop_low.to_csv(f"{OUTPUT_DIR}proportions_lower.csv")
+    _ = prop_high.to_csv(f"{OUTPUT_DIR}proportions_upper.csv")
+    ## Plot Component Change
+    _ = make_directory(f"{OUTPUT_DIR}plots/topic_deltas/")
+    component_groups = list(chunks(prop_mu.columns, MAX_PLOT_TOPICS))
+    for g, group in tqdm(enumerate(component_groups),
+                         desc="Component Change Plots",
+                         file=sys.stdout,
+                         total=len(component_groups)):
+        fig, ax = plot_proportions_line(prop_mu,
+                                        prop_ci=(prop_low, prop_high),
+                                        components=group)
+        fig.savefig(f"{OUTPUT_DIR}plots/topic_deltas/line_group_{g+1}.png",dpi=100)
+        plt.close(fig)
     print("Script Complete!")
 
 #####################

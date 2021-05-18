@@ -24,3 +24,17 @@ def make_directory(directory,
     ## Create
     if not os.path.exists(directory):
         _ = os.makedirs(directory)
+
+def chunks(l,
+           n):
+    """
+    Yield successive n-sized chunks from l.
+    Args:
+        l (list): List of objects
+        n (int): Chunksize
+    
+    Yields:
+        Chunks
+    """
+    for i in range(0, len(l), n):
+        yield l[i:i + n]
