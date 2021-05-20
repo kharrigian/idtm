@@ -22,6 +22,9 @@ from scipy.special import logsumexp
 
 ## Local
 from .base import TopicModel
+from .helpers import (sample_categorical,
+                      sample_multinomial,
+                      logistic_transform)
 
 #######################
 ### Globals
@@ -41,7 +44,6 @@ class IDTM(TopicModel):
     def __init__(self,
                  initial_k=1,
                  initial_m=3,
-                 eta=.01,
                  alpha_0_a=1,
                  alpha_0_b=1,
                  gamma_0_a=1,
@@ -75,7 +77,6 @@ class IDTM(TopicModel):
         ## Distribution Parameters
         self._initial_k = initial_k
         self._initial_m = initial_m
-        self._eta = eta
         self._alpha_0 = (alpha_0_a, alpha_0_b)
         self._gamma_0 = (gamma_0_a, gamma_0_b)
         self._rho_0 = rho_0
@@ -126,6 +127,21 @@ class IDTM(TopicModel):
         A = list(map(lambda i: i[1], sorted(A, key=lambda x: x[0])))
         return A
     
+    def _normalize(self,
+                   a,
+                   **kwargs):
+        """
+
+        """
+        if not isinstance(a, np.ndarray):
+            a = np.array(a)
+        asum = a.sum(**kwargs)
+        a_norm = np.divide(a,
+                           asum,
+                           out=np.zeros_like(a),
+                           where=asum>0)
+        return a_norm
+
     def _initialize_bookkeeping(self,
                                 X,
                                 timepoints):
@@ -139,45 +155,137 @@ class IDTM(TopicModel):
         ## Initialize Random Dish Assignments for Each Table [n x m_n]
         self.table2dish = [[np.random.randint(self._initial_m) for _ in range(self._initial_k)] for _ in X]
         ## Epoch Associated with Each Document
-        self.rest2epoch = {t:[] for t in range(self._t)}
+        self.rest2epoch = [[] for t in range(self._t)]
         for i, t in enumerate(timepoints):
             self.rest2epoch[t].append(i)
         ## Component Counts For Each Epoch [t x 1]
-        self.K_t = [0 for _ in range(self._t)]
-        for epoch, documents in self.rest2epoch.items():
+        self.K_t = np.zeros(self._t, dtype=np.int)
+        k_present = []
+        self.K_born = []
+        for epoch, documents in enumerate(self.rest2epoch):
             epoch_comp_counts = Counter()
             for d in documents:
                 for comp_k in self.table2dish[d]:
                     epoch_comp_counts[comp_k] += 1
             self.K_t[epoch] = len(epoch_comp_counts)
+            k_present.append(set(epoch_comp_counts.keys()))
+            if epoch == 0:
+                self.K_born.append(k_present[-1])
+            else:
+                new_present = set()
+                for p in k_present[:-1]:
+                    new_present.update(k_present[-1] - p)
+                self.K_born.append(new_present)
         ## Space for Sampling
         initial_kmax = max(self.V // 2, max(self.K_t))
         initial_mmax = max(max(list(map(len,X))) // 2, self._initial_m)
         ## Table and Component Counts (m: [t x k_max], n: [n x m_max])
-        self.m = np.array([[0 for _ in range(initial_kmax)] for _ in range(self._t)])
-        self.n = np.array([[0 for _ in range(initial_mmax)] for _ in X])
-        for epoch, documents in self.rest2epoch.items():
+        self.m = np.array([[0 for _ in range(initial_kmax)] for _ in range(self._t)], dtype=np.int)
+        self.n = np.array([[0 for _ in range(initial_mmax)] for _ in X], dtype=np.int)
+        for epoch, documents in enumerate(self.rest2epoch):
             for d in documents:
-                for table_k in self.table2dish[d]:
-                    self.m[epoch][table_k] += 1
+                for dish_k in self.table2dish[d]:
+                    self.m[epoch][dish_k] += 1
+                for table_k in self.word2table[d]:
                     self.n[d][table_k] += 1
         ## Initialize Components [t x k_max x V]
         self.phi = [None for _ in range(self._t)]
-        self.phi[0] = stats.dirichlet([self._eta]*self.V).rvs(initial_kmax)
+        self.phi[0] = stats.multivariate_normal([0] * self.V, self._sigma_0).rvs(initial_kmax)
         for epoch in range(1, self._t):
             self.phi[epoch] = np.zeros(self.phi[0].shape)
             for k, comp in enumerate(self.phi[epoch-1]):
-                self.phi[epoch][k] = stats.dirichlet(comp + self._eta).rvs()[0]
+                self.phi[epoch][k] = stats.multivariate_normal(comp, self._rho_0).rvs()
         self.phi = np.stack(self.phi)
+        ## Transform Phi using Logistic Transformation
+        self.phi_T = logistic_transform(self.phi, axis=2, keepdims=True)
         ## Active Components in Each Epoch [t x k_t]
         self._live_k = [list(range(k)) for k in self.K_t]
-        ## Initialize Word Counts ([t x k_max x V] frequency of each word for each k for each t)
-        self.Z = np.zeros_like(self.phi)
-        for epoch, documents in self.rest2epoch.items():
+        ## Initialize Word Counts (Z: [t x k_max x V] frequency of each word for each k for each t)
+        ## v: [n x m_max x V]: frequency of each word in each table for each document
+        self.Z = np.zeros_like(self.phi, dtype=np.int)
+        self.v = np.zeros((len(X), initial_mmax, self.V), dtype=np.int)
+        for epoch, documents in enumerate(self.rest2epoch):
             for d in documents:
                 for w_d, t_d in zip(X[d], self.word2table[d]):
                     k_d = self.table2dish[d][t_d]
                     self.Z[epoch,k_d,w_d] += 1
+                    self.v[d, t_d, w_d] += 1
+        ## Concetration Parameters
+        self.gamma = stats.gamma(self._gamma_0[0],scale=1/self._gamma_0[1]).rvs()
+        self.alpha = stats.gamma(self._alpha_0[0],scale=1/self._alpha_0[1]).rvs()
+        ## Initialize Auxiliary Variable Sampler
+        self._phi_aux_sampler = stats.multivariate_normal([0]*self.V, self._sigma_0)
+        self._phi_aux = self._phi_aux_sampler.rvs(self._q)
+        self._phi_aux_T = logistic_transform(self._phi_aux, axis=1, keepdims=True)
+
+    def _polynomial_expand(self,
+                           a,
+                           c):
+        """
+        [a]^c = a(a+1)(a+2)...(a+c-1)
+        """
+        expansion = (np.arange(0, c) + a).prod()
+        return expansion
+    
+    def _log(self,
+             x):
+        """
+
+        """
+        return np.log(x, where=x>0, out=np.ones_like(x) * -np.inf)
+
+    def _metropolis_hastings(self,
+                             phi_k,
+                             phi_k_star,
+                             v_k,
+                             q):
+        """
+        Compute Acceptance Ratio for Linear Emission Model and return
+        selected sample
+
+        Args:
+            phi_k (2d-array): Current parameters
+            phi_k_star (2d-array): Proposed parameters
+            v_k (2d-array): Current counts
+            q (stats frozen distribution): proposed distribution, list if evolves over epoch
+
+        Returns:
+            phi_k_selected (2d-array), phi_k_T_selected (2d-array), accept (bool)
+        """
+        ## Static vs. Epoch Proposal
+        if not isinstance(q, list):
+            q = [q for _ in range(phi_k.shape[0])]
+        ## Transform the Parameters
+        phi_k_T = logistic_transform(phi_k, axis=1, keepdims=True)
+        phi_k_star_T = logistic_transform(phi_k_star, axis=1, keepdims=True)
+        ## Compute Initial State Probability
+        H = stats.multivariate_normal([0]*self.V, self._sigma_0)
+        h_star_ll = H.logpdf(phi_k_star[0])
+        h_ll = H.logpdf(phi_k[0])
+        ## Compute Transition Probabilities
+        transition_ll = 0
+        transition_star_ll = 0
+        proposal_ll = 0
+        proposal_star_ll = 0
+        for t, v_kt in enumerate(v_k):
+            ## Proposal Data Likelihood
+            transition_star_ll += (v_kt * self._log(phi_k_star_T[t])).sum()
+            transition_star_ll += 0 if t == 0 else stats.multivariate_normal(phi_k_star[t-1],self._rho_0).logpdf(phi_k_star[t])
+            ## Existing Data Likelihood
+            transition_ll += (v_kt * self._log(phi_k_T[t])).sum()
+            transition_ll += 0 if t == 0 else stats.multivariate_normal(phi_k[t-1],self._rho_0).logpdf(phi_k[t])
+            ## Proposal Component Density
+            proposal_ll += q[t].logpdf(phi_k[t])
+            proposal_star_ll += q[t].logpdf(phi_k_star[t])
+        ## Compute Ratio
+        ratio_ll = h_star_ll + transition_star_ll + proposal_ll - \
+                    (h_ll + transition_ll + proposal_star_ll)
+        ratio = min(1, np.exp(ratio_ll))
+        ## Return Selected Sample
+        if np.random.uniform() < ratio:
+            return phi_k_star, phi_k_star_T, 1
+        else:
+            return phi_k, phi_k_T, 0
 
     def fit(self,
             X,
@@ -194,12 +302,15 @@ class IDTM(TopicModel):
         _ = self._initialize_bookkeeping(X, timepoints)
         ## Inference Loop
         for iteration in range(self.n_iter):
-
-            ##### Sample a Topic for Each Table
+            ####### Step 1: Sample Topic k_tdb for table tdb
+            print(1)
+            ## Initialize m'
             m_kt_prime = np.zeros(self.m.shape)
-            for epoch in range(self._t):
-                
-                ## Compute m_kt'
+            ## Iterate over time periods
+            for epoch, epoch_docs in enumerate(self.rest2epoch):
+                ## Indices of Documents in Epoch
+                epoch_docs = self.rest2epoch[epoch]
+                ## Compute m_kt' for the Epoch
                 if epoch == 0:
                     pass
                 elif (epoch + 1) < self._delta:
@@ -207,5 +318,219 @@ class IDTM(TopicModel):
                 elif (epoch + 1) >= self._delta:
                     m_kt_prime[epoch] = (m_kt_prime[epoch-1] + self.m[epoch-1]) * np.exp(-1 / self._lambda_0) - \
                                          self.m[epoch-(self._delta+1)] * np.exp(-(self._delta + 1) / self._lambda_0)
+                ## Cycle Through Documents
+                for document in epoch_docs:
+                    for table, dish in enumerate(self.table2dish[document]):
+                        ## Get Words Indices at Table
+                        w_tdb = [w for w, t in zip(X[document], self.word2table[document]) if t == table]
+                        ## Remove Dish from Counts for the Epoch
+                        self.m[epoch, dish] -= 1
+                        self.Z[epoch, dish] -= self.v[document][table]
+                        ## Identify Topics (Used in Epoch or Existing Previously)
+                        k_used = set(self.m[epoch].nonzero()[0])
+                        k_exists = set(m_kt_prime[epoch].nonzero()[0]) - k_used
+                        max_k = max(k_used | k_exists)
+                        ## Get Conditional Probability of Data
+                        f_v_tdb_used = np.exp(self._log(self.phi_T[epoch][:,w_tdb]).sum(axis=1))
+                        if epoch > 0:
+                            f_v_tdb_exists = np.exp(self._log(self.phi_T[epoch-1,:,w_tdb]).sum(axis=0))
+                        else:
+                            f_v_tdb_exists = np.zeros_like(f_v_tdb_used)
+                        f_v_tdb_new =  np.exp(self._log(self._phi_aux_T[:,w_tdb]).sum(axis=1))
+                        ## Probabilities
+                        p_k_used = (self.m[epoch] + m_kt_prime[epoch]) * f_v_tdb_used
+                        p_k_exist = m_kt_prime[epoch] * f_v_tdb_exists
+                        p_k_not_new = np.where([i in k_used for i in range(p_k_used.shape[0])],
+                                                p_k_used,
+                                                p_k_exist)
+                        p_k_new = self.gamma / self._q * f_v_tdb_new
+                        ## Merge Distribution and Normalize
+                        p_k_all = np.hstack([p_k_not_new, p_k_new])
+                        p_k_all = p_k_all / p_k_all.sum()
+                        ## TODO: Figure out transition probability term for reweighting K_potential
+                        ## Sample Topic
+                        k_sample = sample_categorical(p_k_all)
+                        ## Case 1: Sampled Topic Exists (Previously or In Epoch Already)
+                        if k_sample <= max_k:
+                            ## Update Counts
+                            self.m[epoch,k_sample] += 1
+                            self.table2dish[document][table] = k_sample
+                            self.Z[epoch, k_sample] += self.v[document][table]
+                            ## Update Component for Unused Component
+                            if k_sample not in k_used:
+                                self.phi[epoch,k_sample] = self.phi[epoch-1,k_sample]
+                                self.phi_T[epoch,k_sample] = self.phi_T[epoch-1,k_sample]
+                        ## Case 2: Sampled Topic is Completely New
+                        else:
+                            ## Figure Out Which Auxiliary Component Was Selected
+                            k_aux = k_sample - p_k_not_new.shape[0]
+                            k_new_ind = max_k + 1
+                            ## Check To See if Expansion Need
+                            if k_new_ind >= self.m.shape[1]:
+                                exp_size = self.m.shape[1] // 2
+                                self.m = np.hstack([self.m, np.zeros((self.m.shape[0], exp_size), dtype=np.int)])
+                                m_kt_prime = np.hstack([m_kt_prime, np.zeros((m_kt_prime.shape[0], exp_size), dtype=np.int)])
+                                self.Z = np.hstack([self.Z, np.zeros((self.Z.shape[0], exp_size, self.Z.shape[2]), dtype=np.int)])
+                                self.phi = np.hstack([self.phi, np.zeros((self.phi.shape[0], exp_size, self.phi.shape[2]), dtype=np.int)])
+                                self.phi_T = np.hstack([self.phi_T, np.zeros((self.phi_T.shape[0], exp_size, self.phi.shape[2]), dtype=np.int)])
+                            ## Update Counts
+                            self.m[epoch, k_new_ind] += 1
+                            self.table2dish[document][table] = k_new_ind
+                            self.Z[epoch, k_new_ind] += self.v[document][table]
+                            ## Update Component
+                            self.phi[epoch,k_new_ind] = self._phi_aux[k_aux]
+                            self.phi_T[epoch,k_new_ind] = self._phi_aux_T[k_aux]
+                            ## Sample New Auxiliary Component
+                            self._phi_aux[k_aux] = self._phi_aux_sampler.rvs()
+                            self._phi_aux_T[k_aux] = logistic_transform(self._phi_aux[k_aux])
+                            ## Add to Live Components
+                            self._live_k[epoch].append(k_new_ind)
+                            self.K_t[epoch] += 1
+            ####### Step 2: Sample a Table b_tdi for Each Word x_tdi
+            print(2)
+            for epoch, epoch_docs in enumerate(self.rest2epoch):
+                for document in epoch_docs:
+                    for i, (x_tdi, b_tdi) in enumerate(zip(X[document],self.word2table[document])):
+                        ## Current Component
+                        k_current = self.table2dish[document][b_tdi]
+                        ## Remove Word From Table
+                        self.n[document][b_tdi] -= 1
+                        self.Z[epoch,k_current,x_tdi] -= 1
+                        self.word2table[document][i] = None
+                        ## Remove Table if Now Empty
+                        now_empty = self.n[document][b_tdi] == 0
+                        if now_empty:
+                            self.m[epoch, k_current] -= 1
+                        ## Probability Of Word For Each Table
+                        f_x_tdi = self.phi_T[epoch, self.table2dish[document], x_tdi]
+                        p_x_tdi = self.n[document,:f_x_tdi.shape[0]] * f_x_tdi
+                        ## Either Sample An Existing Table or a New Table
+                        p_b_0 = np.hstack([p_x_tdi, np.r_[self.alpha]])
+                        p_b_0 = p_b_0 / p_b_0.sum()
+                        b_0 = sample_categorical(p_b_0)
+                        ## Case 1: Existing Table
+                        if b_0 < p_b_0.shape[0] - 1:
+                            ## Table Component
+                            k_sampled = self.table2dish[document][b_0]
+                            ## Update Counts
+                            self.n[document, b_0] += 1
+                            self.Z[epoch,k_sampled,x_tdi] += 1
+                            self.word2table[document][i] = b_0
+                        ## Case 2: New Table
+                        else:
+                            ## Identify Topics (Used in Epoch or Existing Previously)
+                            k_used = set(self.m[epoch].nonzero()[0])
+                            k_exists = set(m_kt_prime[epoch].nonzero()[0]) - k_used
+                            max_k = max(k_used | k_exists)
+                            ## Check Cache Size (Tables)
+                            if b_0 >= self.n.shape[1]:
+                                exp_size = self.n.shape[1] // 4
+                                self.n = np.hstack([self.n, np.zeros((self.n.shape[0],exp_size), dtype=np.int)])
+                                self.v = np.hstack([self.v, np.zeros((self.v.shape[0],exp_size,self.v.shape[2]),dtype=np.int)])
+                            ## Probability of Word For a New Table under Each Component
+                            p_k_used = (m_kt_prime[epoch] + self.m[epoch]) * self.phi_T[epoch,:,x_tdi]
+                            if epoch > 0:
+                                p_k_exists = m_kt_prime[epoch] * self.phi_T[epoch-1,:,x_tdi]
+                            else:
+                                p_k_exists = np.zeros_like(p_k_used)
+                            p_k_not_new = np.where([i in k_used for i in range(p_k_used.shape[0])],
+                                                   p_k_used,
+                                                   p_k_exists)
+                            p_k_new = self.gamma / self._q * self._phi_aux_T[:,x_tdi]
+                            ## Construct Sample Probability
+                            p_k_all = np.hstack([p_k_not_new, p_k_new])
+                            p_k_all = p_k_all / p_k_all.sum()
+                            ## Sample Component
+                            k_sampled = sample_categorical(p_k_all)
+                            ## Case 1: Sampled an Existing Component
+                            if k_sampled <= max_k:
+                                ## Update Counts
+                                self.n[document, b_0] += 1
+                                self.Z[epoch,k_sampled,x_tdi] += 1
+                                self.word2table[document][i] = b_0
+                                self.m[epoch,k_sampled] += 1
+                                self.table2dish[document].append(k_sampled)
+                                ## Update Component for Unused Component
+                                if k_sampled not in k_used:
+                                    self.phi[epoch,k_sampled] = self.phi[epoch-1,k_sampled]
+                                    self.phi_T[epoch,k_sampled] = self.phi_T[epoch-1,k_sampled]
+                            ## Case 2: Sampled a New Component
+                            else:
+                                ## Find Appropriate Auxiliary Variable
+                                k_aux = k_sampled - p_k_not_new.shape[0]
+                                k_new_ind = max_k + 1
+                                ## Check Cache Size (Components)
+                                if k_new_ind >= self.m.shape[1]:
+                                    exp_size = self.m.shape[1] // 2
+                                    self.m = np.hstack([self.m, np.zeros((self.m.shape[0], exp_size), dtype=np.int)])
+                                    m_kt_prime = np.hstack([m_kt_prime, np.zeros((m_kt_prime.shape[0], exp_size), dtype=np.int)])
+                                    self.Z = np.hstack([self.Z, np.zeros((self.Z.shape[0], exp_size, self.Z.shape[2]), dtype=np.int)])
+                                    self.phi = np.hstack([self.phi, np.zeros((self.phi.shape[0], exp_size, self.phi.shape[2]), dtype=np.int)])
+                                    self.phi_T = np.hstack([self.phi_T, np.zeros((self.phi_T.shape[0], exp_size, self.phi.shape[2]), dtype=np.int)])
+                                ## Update counts
+                                self.m[epoch, k_new_ind] += 1
+                                self.Z[epoch, k_new_ind, x_tdi] += 1
+                                self.n[document,b_0] += 1
+                                self.table2dish[document].append(k_new_ind)
+                                self.word2table[document][i] = b_0
+                                ## Add To Live Components
+                                self.K_t[epoch] += 1
+                                self._live_k[epoch].append(k_new_ind)
+                                ## Update Component
+                                self.phi[epoch,k_new_ind] = self._phi_aux[k_aux]
+                                self.phi_T[epoch,k_new_ind] = self._phi_aux_T[k_aux]
+                                ## Sample New Auxiliary Component
+                                self._phi_aux[k_aux] = self._phi_aux_sampler.rvs()
+                                self._phi_aux_T[k_aux] = logistic_transform(self._phi_aux[k_aux])
+            ## Some Data Information
+            n_J = self.n.sum(axis=1) ## Number of Words Per Document
+            m_J = (self.n != 0).sum(axis=1) ## Number of Tables per Document
+            T = self.m.sum() ## Total Number of Tables
+            K = self.K_t.max() ## Maximum Number of Components         
+            ####### Step 3: Sample Concetration Parameter Alpha
+            print(3)
+            w_j = stats.beta(self.alpha + 1, n_J).rvs()
+            p_s_j = (n_J * (self._alpha_0[0] - np.log(w_j))) / (self._alpha_0[0] + m_J - 1 + n_J * (self._alpha_0[1] - np.log(w_j)))
+            s_j = stats.bernoulli(p_s_j).rvs()
+            self.alpha = stats.gamma(self._alpha_0[0] + self.m.sum() - s_j.sum(), scale = 1 / (self._alpha_0[1] - np.log(w_j).sum())).rvs()
+            ####### Step 4: Sample Concentration Parameter Gamma
+            print(4)
+            eta = stats.beta(self.gamma+1, T).rvs()
+            i_gamma_mix = int(np.random.uniform(0,1) > (self._gamma_0[0] + K - 1)/(self._gamma_0[0] + K - 1 + T*(self._gamma_0[1] - np.log(eta))))
+            if i_gamma_mix == 0:
+                self.gamma = stats.gamma(self._gamma_0[0] + K, scale = 1 / (self._gamma_0[1] - np.log(eta))).rvs()
+            elif i_gamma_mix == 1:
+                self.gamma = stats.gamma(self._gamma_0[0] + K - 1, scale = 1 / (self._gamma_0[1] - np.log(eta))).rvs()
+            ####### TODO Step 5: Sample Components phi_tk using Z
+            print(5)
+            n_accept = [0,0]
+            for k in range(self.phi.shape[1]):
+                ## Isolate Existing Variables
+                phi_k = self.phi[:,k,:]
+                phi_T_k = self.phi_T[:,k,:]
+                v_k = self.Z[:,k,:]
+                v_k_norm = v_k / v_k.sum(axis=1,keepdims=True)
+                ## Generate Proposal Sample
+                import pdb; pdb.set_trace()
+                q = [stats.dirichlet(vkn + 1e-10) for vkn in v_k_norm]
+                # q = [stats.multivariate_normal(_q,1e-1) for _q in q_p]
+                # q = [stats.multivariate_normal(phi_kt, 1e-1) for phi_kt in phi_k]
+                phi_k_star = np.vstack([_q.rvs() for _q in q])
+                ## MH Step
+                phi_k, phi_T_k, accept = self._metropolis_hastings(phi_k,
+                                                                   phi_k_star,
+                                                                   v_k,
+                                                                   q)
+                n_accept[0] += accept
+                n_accept[1] += 1
+                ## Update Parameters Based on MH Outcome
+                self.phi[:,k,:] = phi_k
+                self.phi_T[:,k,:] = phi_T_k
+            print(n_accept[0] / n_accept[1])
+            print(self.phi.shape)
+            print(self.m.shape)
+            print(self.n.shape)
+
+        return self
 
 
