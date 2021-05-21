@@ -10,3 +10,4 @@ nltk
 gensim
 python-Levenshtein
 tomotopy
+hmmlearn

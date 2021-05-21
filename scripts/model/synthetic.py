@@ -101,7 +101,7 @@ def generate_data(gamma=5,
         epoch_theta = stats.dirichlet(alpha_t + smoothing).rvs(n_t[epoch])
         for d in range(n_t[epoch]):
             ## Get Number of Words in Document
-            d_m = epoch_m[d]
+            d_m = max(1,epoch_m[d])
             ## Cache Epoch
             t[current_ind] = epoch
             ## Sample Document Topic Distribution
@@ -301,8 +301,8 @@ def main():
     ## Generate Data
     data = generate_data(beta_0=1e-1,
                          beta_1=1e-1,
-                         n_mu=100,
-                         m_mu=10,
+                         n_mu=25,
+                         m_mu=5,
                          gamma=10)
     ## Number of Timepoints
     n_timepoints = max(data["data"]["t"]) + 1
@@ -319,38 +319,72 @@ def main():
     plt.close(fig)
     # ## Fit Models
     # print("Fitting LDA Model")
-    # lda = LDA(n_iter=10000, n_sample=1000, cache_params=["theta","phi","alpha"], cache_rate=1, verbose=True, jobs=8, k=6, seed=42, alpha=0.01, eta=0.01)
+    # lda = LDA(vocabulary=data["data"]["vocabulary"],
+    #           n_iter=10000,
+    #           n_sample=1000,
+    #           cache_params=["theta","phi","alpha"],
+    #           cache_rate=1,
+    #           verbose=True,
+    #           jobs=8,
+    #           k=6,
+    #           seed=42,
+    #           alpha=0.01,
+    #           eta=0.01)
     # lda = lda.fit(data["data"]["X"])
     # lda_infer, lda_ll = lda.theta, lda.ll
     # print("Fitting HDP Model")
-    # hdp = HDP(n_iter=10000, n_sample=1000, cache_params=["theta","phi","alpha"], cache_rate=1, verbose=True, jobs=8, initial_k=6, alpha=0.01, eta=0.01, threshold=0.01, seed=42)
+    # hdp = HDP(vocabulary=data["data"]["vocabulary"],
+    #           n_iter=10000,
+    #           n_sample=1000,
+    #           cache_params=["theta","phi","alpha"],
+    #           cache_rate=1,
+    #           verbose=True,
+    #           jobs=8,
+    #           initial_k=6,
+    #           alpha=0.01,
+    #           eta=0.01,
+    #           threshold=0.01,
+    #           seed=42)
     # hdp = hdp.fit(data["data"]["X"])
     # hdp_infer, hdp_ll = hdp.theta, hdp.ll
     # print("Fitting DTM Model")
-    # dtm = DTM(n_iter=10000, n_sample=1000, cache_params=["theta","phi","alpha"], cache_rate=1, verbose=True, jobs=8, t=n_timepoints, k=6, alpha_var=0.01, eta_var=0.01, phi_var=0.01, seed=42)
+    # dtm = DTM(vocabulary=data["data"]["vocabulary"],
+    #           n_iter=10000,
+    #           n_sample=1000,
+    #           cache_params=["theta","phi","alpha"],
+    #           cache_rate=1,
+    #           verbose=True,
+    #           jobs=8,
+    #           t=n_timepoints,
+    #           k=6,
+    #           alpha_var=0.01,
+    #           eta_var=0.01,
+    #           phi_var=0.01,
+    #           seed=42)
     # dtm = dtm.fit(data["data"]["X"], labels=data["data"]["t"], labels_key="timepoint")
     # dtm_infer, dtm_ll = dtm.theta, dtm.ll
-    # ## Trace Plots
-    # for model, model_type in zip([lda,hdp,dtm],["lda","hdp","dtm"]):
-    #     print("Generating Plots for {} Model".format(model_type.upper()))
-    #     _ = plot_traces(model, model_type, random_seed=42)
-
     print("Fitting iDTM Model")
     n_timepoints = max(data["data"]["t"]) + 1
     idtm = IDTM(vocabulary=data["data"]["vocabulary"],
-                initial_k=6,
+                initial_k=25,
                 initial_m=3,
-                alpha_0_a=1,
-                alpha_0_b=1,
-                gamma_0_a=1,
-                gamma_0_b=1,
-                sigma_0=10,
-                rho_0=0.01,
-                delta=4,
+                alpha_0_a=.1,
+                alpha_0_b=10,
+                gamma_0_a=.1,
+                gamma_0_b=10,
+                sigma_0=.1,
+                rho_0=.1,
+                delta=8,
                 lambda_0=0.5,
-                q=5,
+                q=1,
                 t=n_timepoints,
-                n_iter=1000,
+                q_dim=3,
+                alpha_filter=4,
+                gamma_filter=10,
+                n_filter=20,
+                threshold=0.001,
+                k_filter_frequency=None,
+                n_iter=100,
                 n_burn=100,
                 cache_rate=None,
                 cache_params=set(),
@@ -358,6 +392,11 @@ def main():
                 seed=42,
                 verbose=True)
     idtm = idtm.fit(data["data"]["X"], data["data"]["t"])
+
+    # ## Trace Plots
+    # for model, model_type in zip([lda,hdp,dtm],["lda","hdp","dtm"]):
+    #     print("Generating Plots for {} Model".format(model_type.upper()))
+    #     _ = plot_traces(model, model_type, random_seed=42)
 
     # inf = data["data"]["theta"]
     # inf = lda_infer
