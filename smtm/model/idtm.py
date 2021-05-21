@@ -171,16 +171,8 @@ class IDTM(TopicModel):
         self.rest2epoch = [[] for t in range(self._t)]
         for i, t in enumerate(timepoints):
             self.rest2epoch[t].append(i)
-        ## Component Counts For Each Epoch [t x 1]
-        self.K_t = np.zeros(self._t, dtype=np.int)
-        for epoch, documents in enumerate(self.rest2epoch):
-            epoch_comp_counts = Counter()
-            for d in documents:
-                for comp_k in self.table2dish[d]:
-                    epoch_comp_counts[comp_k] += 1
-            self.K_t[epoch] = len(epoch_comp_counts)
         ## Space for Sampling
-        initial_kmax = max(self.V // 2, max(self.K_t))
+        initial_kmax = max(self.V // 2, self._initial_k)
         initial_mmax = max(max(list(map(len,X))) // 2, self._initial_m)
         ## Table and Component Counts (m: [t x k_max], n: [n x m_max])
         self.m = np.array([[0 for _ in range(initial_kmax)] for _ in range(self._t)], dtype=np.int)
@@ -195,6 +187,8 @@ class IDTM(TopicModel):
         ## Component Lifespans
         self.K_life = np.zeros((initial_kmax, 2), dtype=np.int)
         for k in range(self.K_life.shape[0]):
+            if len((self.m[:,k] != 0).nonzero()[0]) == 0:
+                continue
             self.K_life[k] = [(self.m[:,k] != 0).nonzero()[0].min(), (self.m[:,k] != 0).nonzero()[0].max()]
         ## Initialize Base Distribution
         self._H = stats.multivariate_normal([0] * self.V, self._sigma_0)
@@ -304,15 +298,16 @@ class IDTM(TopicModel):
         emission_star_ll = []
         transition_ll = []
         transition_star_ll = []
-        for t, v_kt in enumerate(v_k):
+        n_k = v_k.sum(axis=1)
+        for t, (v_kt, n_kt) in enumerate(zip(v_k,n_k)):
             ## Ignore First Step
             if t == 0:
                 continue
             ## Proposal Data Likelihood
-            emission_star_ll.append((v_kt * self._log(phi_k_star_smooth[t])).sum())
+            emission_star_ll.append(stats.multinomial(n_kt, phi_k_star_smooth[t]).logpmf(v_kt))
             transition_star_ll.append(stats.multivariate_normal(phi_k_star[t-1],self._rho_0).logpdf(phi_k_star[t]))
             ## Existing Data Likelihood
-            emission_ll.append((v_kt * self._log(phi_k_smooth[t])).sum())
+            emission_star_ll.append(stats.multinomial(n_kt, phi_k_smooth[t]).logpmf(v_kt))
             transition_ll.append(stats.multivariate_normal(phi_k[t-1],self._rho_0).logpdf(phi_k[t]))
         ## Compute Ratio
         if v_k.shape[0] > 1:
@@ -339,6 +334,7 @@ class IDTM(TopicModel):
         old2new_ind = dict(zip(nonempty_components, range(nonempty_components.shape[0])))
         ## Remove Empty Components
         self.m = self.m[:,nonempty_components]
+        self.m_kt_prime = self.m_kt_prime[:,nonempty_components]
         self.phi = self.phi[:,nonempty_components,:]
         self.phi_T = self.phi_T[:,nonempty_components,:]
         self.Z = self.Z[:,nonempty_components,:]
@@ -373,6 +369,8 @@ class IDTM(TopicModel):
             mdist = self.m.sum(axis=0) / self.m.sum()
             k_filter = (mdist >= self._threshold).astype(int)
             k_filter_on = True
+        ## Track Where Components Are Created
+        k_created = [0,0]
         ####### Step 1: Sample Topic k_tdb for table tdb
         ## Reset m'
         self.m_kt_prime = np.zeros(self.m.shape)
@@ -393,20 +391,22 @@ class IDTM(TopicModel):
                 for table, dish in enumerate(self.table2dish[document]):
                     ## Get Words Indices at Table
                     w_tdb = [w for w, t in zip(X[document], self.word2table[document]) if t == table]
+                    n_tdb = len(w_tdb)
                     ## Remove Dish from Counts for the Epoch
                     self.m[epoch, dish] -= 1
                     self.Z[epoch, dish] -= self.v[document][table]
                     ## Identify Topics (Used in Epoch or Existing Previously)
                     k_used = set(self.m[epoch].nonzero()[0])
-                    k_exists = set(self.m_kt_prime[epoch].nonzero()[0]) - k_used
+                    k_exists = set(self.m_kt_prime[epoch].nonzero()[0]) - k_used ## Exists but not Used
                     max_k = max(k_used | k_exists)
                     ## Get Conditional Probability of Data Given Table Component
-                    f_v_tdb_used = np.exp(self._log(self.phi_T[epoch,:,w_tdb]).sum(axis=0))
+                    v_tdk = self.v[document][table]
+                    f_v_tdb_used = np.array([stats.multinomial(n_tdb, p).pmf(v_tdk) for p in self.phi_T[epoch]])
                     if epoch > 0:
-                        f_v_tdb_exists = np.exp(self._log(self.phi_T[epoch-1,:,w_tdb]).sum(axis=0))
+                        f_v_tdb_exists = np.array([stats.multinomial(n_tdb, p).pmf(v_tdk) for p in self.phi_T[epoch-1]])
                     else:
                         f_v_tdb_exists = np.zeros_like(f_v_tdb_used)
-                    f_v_tdb_new = np.exp(self._log(self._phi_aux_T[:,w_tdb]).sum(axis=1))
+                    f_v_tdb_new = np.array([stats.multinomial(n_tdb, p).pmf(v_tdk) for p in self._phi_aux_T])
                     ## Probabilities
                     p_k_used = (self.m[epoch] + self.m_kt_prime[epoch]) * f_v_tdb_used
                     p_k_exist = self.m_kt_prime[epoch] * f_v_tdb_exists
@@ -438,6 +438,7 @@ class IDTM(TopicModel):
                         self.K_life[k_sample,1] = max(epoch, self.K_life[k_sample,1])
                     ## Case 2: Sampled Topic is Completely New
                     else:
+                        k_created[0] += 1
                         ## Figure Out Which Auxiliary Component Was Selected
                         k_aux = k_sample - p_k_not_new.shape[0]
                         k_new_ind = max_k + 1
@@ -461,7 +462,6 @@ class IDTM(TopicModel):
                         self._phi_aux[k_aux] = self._H.rvs()
                         self._phi_aux_T[k_aux] = logistic_transform(self._phi_aux[k_aux])
                         ## Add to Live Components
-                        self.K_t[epoch] += 1
                         self.K_life[k_new_ind] = [epoch, epoch]
         ####### Step 2: Sample a Table b_tdi for Each Word x_tdi
         for epoch, epoch_docs in enumerate(self.rest2epoch):
@@ -509,7 +509,7 @@ class IDTM(TopicModel):
                         ## Probability of Word For a New Table under Each Component
                         p_k_used = (self.m_kt_prime[epoch] + self.m[epoch]) * self.phi_T[epoch,:,x_tdi]
                         if epoch > 0:
-                            p_k_exists = self.m_kt_prime[epoch] * self.phi[epoch-1,:,x_tdi]
+                            p_k_exists = self.m_kt_prime[epoch] * self.phi_T[epoch-1,:,x_tdi]
                         else:
                             p_k_exists = np.zeros_like(p_k_used)
                         p_k_not_new = np.where([i in k_used for i in range(p_k_used.shape[0])],
@@ -540,6 +540,7 @@ class IDTM(TopicModel):
                                 self.phi_T[epoch,k_sampled] = logistic_transform(self.phi[epoch,k_sampled])
                         ## Case 2: Sampled a New Component
                         else:
+                            k_created[1] += 1
                             ## Find Appropriate Auxiliary Variable
                             k_aux = k_sampled - p_k_not_new.shape[0]
                             k_new_ind = max_k + 1
@@ -560,8 +561,6 @@ class IDTM(TopicModel):
                             self.table2dish[document].append(k_new_ind)
                             self.word2table[document][i] = b_0
                             self.K_life[k_new_ind] = [epoch, epoch]
-                            ## Add To Live Components
-                            self.K_t[epoch] += 1
                             ## Update Component
                             self.phi[epoch,k_new_ind] = self._phi_aux[k_aux]
                             self.phi_T[epoch,k_new_ind] = self._phi_aux_T[k_aux]
@@ -579,7 +578,7 @@ class IDTM(TopicModel):
                 n_J = self.n[documents].sum(axis=1) ## Number of Words Per Document
                 m_J = (self.n[documents] != 0).sum(axis=1) ## Number of Tables per Document
                 T = self.m[epoch].sum() ## Total Number of Tables
-                K = self.K_t[epoch] ## Maximum Number of Components         
+                K = len(self.m[epoch].nonzero()[0])
                 ####### Step 3: Sample Concetration Parameter Alpha
                 w_j = stats.beta(self.alpha[epoch] + 1, n_J).rvs()
                 p_s_j = (n_J * (self._alpha_0[0] - np.log(w_j))) / (self._alpha_0[0] + m_J - 1 + n_J * (self._alpha_0[1] - np.log(w_j)))
@@ -638,17 +637,16 @@ class IDTM(TopicModel):
             else:
                 self.phi[:,k,:] = phi_k
                 self.phi_T[:,k,:] = logistic_transform(phi_k, axis=1, keepdims=True)
-        ## Update User on Progress
+        ## Update User on Training Progress
         if self.verbose:
             print("\nIteration {} Complete\n".format(iteration+1)+"~"*50)
             print("Acceptance:", n_accept[0] / n_accept[1])
-            print("Max # Components:", max(list(map(max,self.table2dish))))
+            print("# Components:", max(list(map(max,self.table2dish))))
             print("Max # Tables:", max(list(map(max,self.word2table))))
-            # print("Alpha:", self.alpha)
-            # print("Gamma", self.gamma)
-            # print("Eta:", self.m.sum(axis=0))
-        ## Clean Up (Remove Empty Components and Tables)
-        _ = self._clean_up()
+            print("Number of New Components Per Sampling Stage:", k_created)
+            print("Alpha:", self.alpha)
+            print("Gamma", self.gamma)
+            print("Eta:", self.m.sum(axis=0))
 
     def fit(self,
             X,
