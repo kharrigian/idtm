@@ -20,6 +20,8 @@ from tqdm import tqdm
 from scipy import stats, sparse
 from scipy.special import logsumexp
 from hmmlearn.hmm import GaussianHMM
+import matplotlib.pyplot as plt
+from scipy.special import gammaln, xlogy
 
 ## Local
 from .base import TopicModel
@@ -227,8 +229,8 @@ class IDTM(TopicModel):
         if self._q == 1:
             self._phi_aux = self._phi_aux.reshape(1,-1)
         self._phi_aux_T = logistic_transform(self._phi_aux, axis=1, keepdims=True)
-        ## Clean Up
-        _ = self._clean_up()
+        ## Clean Up and Initialize Component Tracking
+        self._component_map = [self._clean_up()]
 
     def _polynomial_expand(self,
                            a,
@@ -255,6 +257,41 @@ class IDTM(TopicModel):
         z = x.sum(**kwargs)
         norm = np.divide(x, z, out=np.zeros_like(x), where=z>0)
         return norm
+
+    def _multinomial_pmf(self, 
+                         x,
+                         n,
+                         p,
+                         log=True):
+        """
+        Multinomial probability mass function.
+        Parameters
+        ----------
+        x : array_like
+            Quantiles.
+        n : int
+            Number of trials
+        p : array_like, shape (k,)
+            Probabilities. These should sum to one. If they do not, then
+            ``p[-1]`` is modified to account for the remaining probability so
+            that ``sum(p) == 1``.
+        Returns
+        -------
+        logpmf : float
+            Log of the probability mass function evaluated at `x`. 
+        """
+        x = np.asarray(x)
+        if p.shape[0] != x.shape[-1]:
+            raise ValueError("x & p shapes do not match.")
+        coef = gammaln(n + 1) - gammaln(x + 1.).sum(axis=-1)
+        val = coef + np.sum(xlogy(x, p), axis=-1)
+        # insist on that the support is a set of *integers*
+        mask = np.logical_and.reduce(np.mod(x, 1) == 0, axis=-1)
+        mask &= (x.sum(axis=-1) == n)
+        out = np.where(mask, val, -np.inf)
+        if not log:
+            out = np.exp(out)
+        return out
 
     def _metropolis_hastings(self,
                              phi_k,
@@ -304,10 +341,10 @@ class IDTM(TopicModel):
             if t == 0:
                 continue
             ## Proposal Data Likelihood
-            emission_star_ll.append(stats.multinomial(n_kt, phi_k_star_smooth[t]).logpmf(v_kt))
+            emission_star_ll.append(self._multinomial_pmf(v_kt, n_kt, phi_k_star_smooth[t],log=True))
             transition_star_ll.append(stats.multivariate_normal(phi_k_star[t-1],self._rho_0).logpdf(phi_k_star[t]))
             ## Existing Data Likelihood
-            emission_star_ll.append(stats.multinomial(n_kt, phi_k_smooth[t]).logpmf(v_kt))
+            emission_star_ll.append(self._multinomial_pmf(v_kt, n_kt, phi_k_smooth[t],log=True))
             transition_ll.append(stats.multivariate_normal(phi_k[t-1],self._rho_0).logpdf(phi_k[t]))
         ## Compute Ratio
         if v_k.shape[0] > 1:
@@ -317,7 +354,7 @@ class IDTM(TopicModel):
             numerator = h_star_ll + q_ll
             denominator = h_ll + q_star_ll
         ratio_ll = numerator - denominator
-        ratio = min(1, np.exp(ratio_ll))
+        ratio = 1 if ratio_ll > 0 else min(1, np.exp(ratio_ll))
         ## Return Selected Sample
         if np.random.uniform() < ratio:
             return phi_k_star, 1
@@ -355,6 +392,7 @@ class IDTM(TopicModel):
                 self.v[document] = np.vstack([self.v[document,nonempty_tables],self.v[document,empty_tables]])
                 self.word2table[document] = [old2new_table_ind[w] for w in self.word2table[document]]
                 self.table2dish[document] = [old2new_ind[d] for d in [dishes[n] for n in nonempty_tables]]
+        return old2new_ind
 
     def _train(self,
                X,
@@ -371,6 +409,7 @@ class IDTM(TopicModel):
             k_filter_on = True
         ## Track Where Components Are Created
         k_created = [0,0]
+        k_ind_created = set()
         ####### Step 1: Sample Topic k_tdb for table tdb
         ## Reset m'
         self.m_kt_prime = np.zeros(self.m.shape)
@@ -401,12 +440,12 @@ class IDTM(TopicModel):
                     max_k = max(k_used | k_exists)
                     ## Get Conditional Probability of Data Given Table Component
                     v_tdk = self.v[document][table]
-                    f_v_tdb_used = np.array([stats.multinomial(n_tdb, p).pmf(v_tdk) for p in self.phi_T[epoch]])
+                    f_v_tdb_used = np.array([self._multinomial_pmf(v_tdk, n_tdb, p, False) for p in self.phi_T[epoch]])
                     if epoch > 0:
-                        f_v_tdb_exists = np.array([stats.multinomial(n_tdb, p).pmf(v_tdk) for p in self.phi_T[epoch-1]])
+                        f_v_tdb_exists = np.array([self._multinomial_pmf(v_tdk, n_tdb, p, False) for p in self.phi_T[epoch-1]])
                     else:
                         f_v_tdb_exists = np.zeros_like(f_v_tdb_used)
-                    f_v_tdb_new = np.array([stats.multinomial(n_tdb, p).pmf(v_tdk) for p in self._phi_aux_T])
+                    f_v_tdb_new = np.array([self._multinomial_pmf(v_tdk, n_tdb, p, False) for p in self._phi_aux_T])
                     ## Probabilities
                     p_k_used = (self.m[epoch] + self.m_kt_prime[epoch]) * f_v_tdb_used
                     p_k_exist = self.m_kt_prime[epoch] * f_v_tdb_exists
@@ -442,6 +481,7 @@ class IDTM(TopicModel):
                         ## Figure Out Which Auxiliary Component Was Selected
                         k_aux = k_sample - p_k_not_new.shape[0]
                         k_new_ind = max_k + 1
+                        k_ind_created.add(k_new_ind)
                         ## Check To See if Expansion Need
                         if k_new_ind >= self.m.shape[1]:
                             exp_size = self.m.shape[1] // 2
@@ -544,6 +584,7 @@ class IDTM(TopicModel):
                             ## Find Appropriate Auxiliary Variable
                             k_aux = k_sampled - p_k_not_new.shape[0]
                             k_new_ind = max_k + 1
+                            k_ind_created.add(k_new_ind)
                             ## Check Cache Size (Components)
                             if k_new_ind >= self.m.shape[1]:
                                 exp_size = self.m.shape[1] // 2
@@ -592,7 +633,8 @@ class IDTM(TopicModel):
                 elif i_gamma_mix == 1:
                     self.gamma[epoch] = stats.gamma(self._gamma_0[0] + K - 1, scale = 1 / (self._gamma_0[1] - np.log(eta))).rvs()
         ## Remove Empty Components
-        _ = self._clean_up()
+        new_component_map = self._clean_up()
+        self._component_map.append(new_component_map)
         ####### Step 5: Sample Components phi_tk using Z
         n_accept = [0,0]
         for k in range(self.phi.shape[1]):
@@ -648,6 +690,39 @@ class IDTM(TopicModel):
             print("Gamma", self.gamma)
             print("Eta:", self.m.sum(axis=0))
 
+    def _get_component_path(self,
+                            k):
+        """
+        Retrieve the indices associated with a component across sampling epochs
+        after initialization
+        """
+        ## Reverse Mapping (Now Goes from index at iteration to index at previous iteration)
+        cmap_r = [{y:x for x, y in c.items()} for c in self._component_map]
+        ## Initialize
+        k_inds = [None for _ in range(len(cmap_r))]
+        ## Cycle Through
+        k_cur = k
+        for iteration in range(len(cmap_r))[::-1]:
+            if k_cur is None:
+                break
+            k_prev = cmap_r[iteration].get(k_cur,None)
+            k_inds[iteration] = k_cur
+            k_cur = k_prev
+        return k_inds[1:]
+    
+    def _get_theta(self):
+        """
+
+        """
+        k_active = max((self.m.sum(axis=0) > 0).nonzero()[0]) + 1
+        theta = np.zeros((len(self.word2table), k_active))
+        for document, table_assignments in enumerate(self.word2table):
+            dish_assignments = [self.table2dish[document][b] for b in table_assignments]
+            for k in dish_assignments:
+                theta[document,k] += 1
+        theta = self._l1_norm(theta, axis=1, keepdims=True)
+        return theta
+
     def fit(self,
             X,
             timepoints):
@@ -661,10 +736,36 @@ class IDTM(TopicModel):
         X = self._construct_item_frequency_list(X)
         ## Initialize Bookkeeping
         _ = self._initialize_bookkeeping(X, timepoints)
+        ## Initialize Parameter Cache for Traces
+        self._alpha_cache = []
+        self._gamma_cache = []
+        self._phi_cache = []
+        self._theta_cache = []
+        self._eta_cache = []
         ## Inference Loop
         for iteration in range(self.n_iter):
             ## Run One Gibbs Iteration
             _ = self._train(X, iteration, iteration==self.n_iter-1)
+            ## Caching
+            if self.cache_rate is not None and (iteration + 1) % self.cache_rate == 0:
+                if "theta" in self.cache_params:
+                    self._theta_cache.append((iteration, self._get_theta()))
+                if "phi" in self.cache_params:
+                    self._phi_cache.append((iteration, self.phi))
+                if "alpha" in self.cache_params:
+                    self._alpha_cache.append((iteration, self.alpha))
+                if "gamma" in self.cache_params:
+                    self._gamma_cache.append((iteration, self.gamma))
+                if "eta" in self.cache_params:
+                    self._eta_cache.append((iteration, self.m.sum(axis=0) / self.m.sum()))
+        ## Cache Final Theta
+        self.theta = self._get_theta()
         return self
+    
+    def infer(self,
+              X,
+              timepoints=None):
+        """
 
-
+        """
+        raise NotImplementedError("Inference without training has not yet been implemented.")

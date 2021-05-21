@@ -379,19 +379,21 @@ def main():
                 q=5,
                 t=n_timepoints,
                 q_dim=3,
-                alpha_filter=.001,
-                gamma_filter=.001,
+                alpha_filter=1,
+                gamma_filter=1,
                 n_filter=10,
                 threshold=0.001,
                 k_filter_frequency=None,
-                n_iter=25,
+                n_iter=50,
                 n_burn=100,
-                cache_rate=None,
-                cache_params=set(),
+                cache_rate=1,
+                cache_params=set(["alpha","gamma","phi","theta","eta"]),
                 jobs=8,
                 seed=42,
                 verbose=True)
     idtm = idtm.fit(data["data"]["X"], data["data"]["t"])
+    idtm_infer = idtm.theta
+    import pdb; pdb.set_trace()
 
     # ## Trace Plots
     # for model, model_type in zip([lda,hdp,dtm],["lda","hdp","dtm"]):
@@ -402,6 +404,7 @@ def main():
     # inf = lda_infer
     # inf = hdp_infer
     # inf = dtm_infer
+    # inf = idtm_infer
 
     # df = pd.DataFrame(np.hstack([data["data"]["t"].reshape(-1,1), inf]))
     # df_agg = df.groupby(0).mean()
