@@ -122,6 +122,7 @@ class TopicModel(object):
         """
         if not filename.endswith(".joblib"):
             filename = f"{filename}.joblib"
+        print(f"Saving Model to `{filename}`")
         _ = joblib.dump(self, filename, **kwargs)
 
     @staticmethod

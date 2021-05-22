@@ -740,7 +740,7 @@ class IDTM(TopicModel):
                        k,
                        iter_min=None,
                        iter_max=None,
-                       transform=False):
+                       transform=True):
         """
 
         """
@@ -750,6 +750,8 @@ class IDTM(TopicModel):
         epochs = []
         data = []
         for j, kind in enumerate(kpath):
+            if kind is None:
+                continue
             jepoch, jphi = self._phi_cache[j]
             if iter_min is not None and jepoch < iter_min:
                 continue
@@ -773,7 +775,7 @@ class IDTM(TopicModel):
                        fig=None,
                        ax=None,
                        alpha=0.05,
-                       transform=False):
+                       transform=True):
         """
 
         """
@@ -814,7 +816,7 @@ class IDTM(TopicModel):
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.set_yticklabels(q.index.tolist(), fontsize=8)
-        ax.set_xlabel("Loading", fontweight="bold", fontsize=14)
+        ax.set_xlabel("Loading" if transform else "Parameter", fontweight="bold", fontsize=14)
         ax.tick_params(axis="x", labelsize=14)
         fig.tight_layout()
         return fig, ax
@@ -825,7 +827,7 @@ class IDTM(TopicModel):
                         indices=None,
                         fig=None,
                         ax=None,
-                        transform=False):
+                        transform=True):
         """
 
         """
@@ -933,7 +935,7 @@ class IDTM(TopicModel):
                          epoch=None,
                          top_k_terms=None,
                          alpha=0.05,
-                         transform=False):
+                         transform=True):
         """
 
         """
@@ -1082,6 +1084,46 @@ class IDTM(TopicModel):
         fig, ax = self._plot_concentration_trace("gamma", epochs=epochs)
         return fig, ax
 
+    def plot_topic_evolution(self,
+                             topic_id,
+                             top_k_terms=None,
+                             top_k_type=np.nanmean,
+                             transform=True):
+        """
+
+        """
+        ## Check Argument
+        if topic_id >= self.phi.shape[1]:
+            raise ValueError("Topic ID out of range")
+        ## Get Data
+        data = self.phi[:,topic_id,:]
+        if transform:
+            data = logistic_transform(data, axis=1, keepdims=True)
+        terms = self.vocabulary if self.vocabulary is not None else list(range(data.shape[1]))
+        if top_k_terms is not None:
+            top_k_i = top_k_type(data, axis=0).argsort()[-top_k_terms:]
+            data = data[:,top_k_i]
+            terms = [terms[i] for i in top_k_i]
+        ## Plot Evolution
+        fig, ax = plt.subplots(figsize=(10,5.8))
+        m = ax.imshow(data.T,
+                      cmap=plt.cm.Reds,
+                      interpolation="nearest",
+                      aspect="auto",
+                      alpha=0.5)
+        ax.set_xlabel("Epoch", fontweight="bold", fontsize=14)
+        ax.set_ylabel("Term", fontweight="bold", fontsize=14)
+        cbar = fig.colorbar(m)
+        cbar.set_label("Parameter", fontweight="bold", fontsize=14)
+        ax.set_title("Topic {}".format(topic_id), fontsize=16, fontweight="bold", loc="left")
+        if top_k_terms is not None:
+            ax.set_yticks(list(range(len(terms))))
+            ax.set_yticklabels(terms, fontsize=8 - (top_k_terms // 100))
+        ax.tick_params(axis="x", labelsize=12)
+        cbar.ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        return fig, ax
+    
     def fit(self,
             X,
             timepoints):
