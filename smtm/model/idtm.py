@@ -16,6 +16,7 @@ from multiprocessing import Pool
 
 ## External Libraries
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 from scipy import stats, sparse
 from scipy.special import logsumexp
@@ -95,6 +96,8 @@ class IDTM(TopicModel):
         self._n_filter = n_filter
         self._q_dim = q_dim
         self._threshold = threshold
+        if self._threshold is None:
+            self._threshold = 0
         self._k_filter_freq = k_filter_frequency
         ## Delta-order Process Parameters
         self._delta = delta
@@ -647,6 +650,7 @@ class IDTM(TopicModel):
         self._component_map.append(component_transition_map)
         ####### Step 5: Sample Components phi_tk using Z
         n_accept = [0,0]
+        self._acceptance = np.zeros(self.phi.shape[1])
         for k in range(self.phi.shape[1]):
             ## Isolate Existing Variables
             phi_k = self.phi[:,k,:]
@@ -677,6 +681,7 @@ class IDTM(TopicModel):
                                                       q)
             n_accept[0] += accept
             n_accept[1] += 1
+            self._acceptance[k] = accept
             ## Check Acceptance
             if not accept:
                 continue
@@ -730,11 +735,156 @@ class IDTM(TopicModel):
         k_inds = k_inds[1:]
         return k_inds
 
-    def _plot_theta_trace(self,
-                          doc_id,
-                          top_k=None,
-                          fig=None,
-                          ax=None):
+    def _get_phi_trace(self,
+                       epoch,
+                       k,
+                       iter_min=None,
+                       iter_max=None,
+                       transform=False):
+        """
+
+        """
+        ## Get Path
+        kpath = self._get_component_path(k)
+        ## Get Data
+        epochs = []
+        data = []
+        for j, kind in enumerate(kpath):
+            jepoch, jphi = self._phi_cache[j]
+            if iter_min is not None and jepoch < iter_min:
+                continue
+            if iter_max is not None and jepoch > iter_max:
+                continue
+            epochs.append(jepoch)
+            data.append(jphi[epoch,kind,:])
+        if len(data) == 0:
+            return None, None
+        data = np.vstack(data)
+        if transform:
+            data = logistic_transform(data, axis=1, keepdims=True)
+        return epochs, data
+
+    def _plot_phi_dist(self,
+                       epoch,
+                       k,
+                       min_iter=None,
+                       max_iter=None,
+                       indices=None,
+                       fig=None,
+                       ax=None,
+                       alpha=0.05,
+                       transform=False):
+        """
+
+        """
+        ## Get Trace
+        _, data = self._get_phi_trace(epoch, k, min_iter, max_iter, transform=transform)
+        if data is None:
+            return None, None
+        ## Compute Percentiles
+        q = np.nanpercentile(data, axis=0, q=[100*alpha/2, 50, 100-(100*alpha/2)])
+        ## Indices
+        if indices is not None:
+            q = q[:,indices]
+            terms = [self.vocabulary[i] for i in indices]
+        else:
+            terms = self.vocabulary
+        ## Summarize Bounds
+        q = pd.DataFrame(data=q.T, index=terms, columns=["lower","median","upper"])
+        q = q.sort_values("median", ascending=True)
+        index = list(range(q.shape[0]))
+        ## Create Plot
+        if fig is None or ax is None:
+            fig, ax = plt.subplots(figsize=(10,5.8))
+        ax.barh(index,
+                left=q["lower"],
+                width=q["upper"]-q["lower"],
+                color="C0",
+                alpha=0.3,
+                label="{:.0f}% C.I.".format(100-(alpha*100)))
+        ax.scatter(q["median"],
+                   index,
+                   color="C0",
+                   alpha=0.8,
+                   s=50)
+        ax.set_ylim(-.5, max(index)+.5)
+        ax.set_xlim(left=max(q["lower"].min() - 0.01, 0))
+        ax.set_yticks(index)
+        ax.legend(loc="lower right", frameon=False)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.set_yticklabels(q.index.tolist(), fontsize=8)
+        ax.set_xlabel("Loading", fontweight="bold", fontsize=14)
+        ax.tick_params(axis="x", labelsize=14)
+        fig.tight_layout()
+        return fig, ax
+
+    def _plot_phi_trace(self,
+                        epoch,
+                        k,
+                        indices=None,
+                        fig=None,
+                        ax=None,
+                        transform=False):
+        """
+
+        """
+        ## Get Data
+        epochs, data = self._get_phi_trace(epoch, k, None, None, transform=transform)
+        if data is None:
+            return None, None
+        ## Isolate Desired Components
+        if indices is None:
+            indices = range(data.shape[1])
+        ## Create Figure
+        if fig is None or ax is None:
+            fig, ax = plt.subplots(figsize=(10,5.6))
+        for term in indices:
+            ax.plot(epochs, data[:,term],alpha=0.4)
+        ax.set_xlim(0, max(epochs))
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+        ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
+        ax.set_ylabel("Sample", fontweight="bold", fontsize=14)
+        ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        return fig, ax
+
+    def _plot_concentration_trace(self,
+                                  parameter,
+                                  epochs=None,
+                                  fig=None,
+                                  ax=None):
+        """
+
+        """
+        if parameter not in ["alpha","gamma"]:
+            raise ValueError("Parameter type not supported.")
+        cache = getattr(self, f"_{parameter}_cache",None)
+        if cache is None:
+            return None, None
+        mcmc_epochs = [c[0] for c in cache]
+        data = np.stack([c[1] for c in cache]).T
+        if epochs is None:
+            epochs = range(data.shape[0])
+        if fig is None or ax is None:
+            fig, ax = plt.subplots(figsize=(10,5.8))
+        for e in epochs:
+            ax.plot(mcmc_epochs, data[e], linewidth=2, alpha=0.4)
+        ax.set_xlim(0, max(mcmc_epochs))
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+        ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
+        ax.set_ylabel("Sample", fontweight="bold", fontsize=14)
+        ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        return fig, ax
+
+    def plot_document_trace(self,
+                            doc_id,
+                            top_k=None,
+                            fig=None,
+                            ax=None):
         """
 
         """
@@ -776,73 +926,160 @@ class IDTM(TopicModel):
         ax.set_ylabel("Sample", fontweight="bold", fontsize=14)
         ax.tick_params(labelsize=12)
         fig.tight_layout()
-        return fig, ax
+        return fig, ax    
 
-    def _plot_phi_trace(self,
-                        epoch,
-                        k,
-                        components=None,
-                        fig=None,
-                        ax=None):
+    def plot_topic_trace(self,
+                         topic_id,
+                         epoch=None,
+                         top_k_terms=None,
+                         alpha=0.05,
+                         transform=False):
         """
 
         """
-        ## Get Path
-        k_path = self._get_component_path(k)
-        ## Isolate Appropriate Data
-        data = []
-        epochs = []
-        for iteration, k_ind in enumerate(k_path):
-            if k_ind is None:
-                continue
-            mcmc_epoch, mcmc_data = self._phi_cache[iteration]
-            mcmc_data = mcmc_data[epoch,k_ind,:]
-            epochs.append(mcmc_epoch)
-            data.append(mcmc_data)
-        data = np.vstack(data)
-        ## Isolate Desired Components
-        if components is None:
-            components = range(data.shape[1])
-        ## Create Figure
-        if fig is None or ax is None:
-            fig, ax = plt.subplots(figsize=(10,5.6))
-        for component in components:
-            ax.plot(epochs, data[:,component],alpha=0.4)
-        ax.set_xlim(0, max(epochs))
-        ax.spines["right"].set_visible(False)
-        ax.spines["top"].set_visible(False)
-        ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
-        ax.set_ylabel("Sample", fontweight="bold", fontsize=14)
-        ax.tick_params(labelsize=12)
+        ## Initialize Figure
+        fig, ax = plt.subplots(1, 2, figsize=(10,5.8), sharex=False, sharey=False)
+        ## Get Terms
+        indices = range(self.V)
+        if top_k_terms is not None:
+            indices = sorted(self.phi[epoch,topic_id].argsort()[-top_k_terms:])
+        ## Plot Shaded Bar Plot of Terms
+        fig, ax[0] = self._plot_phi_dist(epoch=epoch,
+                                         k=topic_id,
+                                         min_iter=None,
+                                         max_iter=None,
+                                         indices=indices,
+                                         fig=fig,
+                                         ax=ax[0],
+                                         alpha=alpha,
+                                         transform=transform)
+        if fig is None:
+            return None
+        ## Plot Trace
+        fig, ax[1] = self._plot_phi_trace(epoch=epoch,
+                                          k=topic_id,
+                                          indices=indices,
+                                          fig=fig,
+                                          ax=ax[1],
+                                          transform=transform)
+        if fig is None:
+            return None
         fig.tight_layout()
         return fig, ax
-    
-    def _plot_concentration_trace(self,
-                                  parameter,
-                                  epochs=None,
-                                  fig=None,
-                                  ax=None):
+
+    def plot_acceptance_trace(self,
+                              fig=None,
+                              ax=None):
         """
 
         """
-        cache = getattr(self, f"_{parameter}_cache",None)
-        if cache is None:
-            return None, None
-        mcmc_epochs = [c[0] for c in cache]
-        data = np.stack([c[1] for c in cache]).T
-        if epochs is None:
-            epochs = range(data.shape[0])
+        ## Parameter Paths
+        components = range(self.phi.shape[1])
+        paths = [(k,self._get_component_path(k)) for k in components]
+        ## Get Data
+        epochs = []
+        data = []
+        kvals = []
+        all_epochs = set()
+        for k, kpath in paths:
+            kvals.append(k)
+            kdata = np.zeros(len(kpath)) * np.nan
+            kepochs = np.zeros(len(kpath)) * np.nan
+            for j, kind in enumerate(kpath):
+                if kind is None:
+                    continue
+                kdata[j] = self._acceptance_cache[j][1][kind]
+                kepochs[j] = self._acceptance_cache[j][0]
+                all_epochs.add(kepochs[j])
+            epochs.append(kepochs)
+            data.append(kdata)
+        epochs = np.stack(epochs)
+        data = np.stack(data)
+        ## Acceptance Rate
+        nn_by_epoch = (~np.isnan(data)).sum(axis=0)
+        accept = np.nansum(data,axis=0)
+        accept_rate = accept / nn_by_epoch
+        accept_epochs = sorted(all_epochs)
+        ## Plot
         if fig is None or ax is None:
             fig, ax = plt.subplots(figsize=(10,5.8))
-        for e in epochs:
-            ax.plot(mcmc_epochs, data[e], linewidth=2, alpha=0.4)
-        ax.set_xlim(0, max(mcmc_epochs))
+        for component, e, d in zip(kvals, epochs, data):
+            dplot = np.zeros_like(d) * np.nan
+            dplot[d==1] = component
+            ax.scatter(e, dplot, alpha=0.8)
+        ax2 = ax.twinx()
+        ax2.plot(accept_epochs, accept_rate, color="black", linewidth=2, alpha=0.5, marker="x")
+        for a in [ax, ax2]:
+            a.set_xlim(-.5, np.nanmax(epochs)+.5)
+            a.spines["top"].set_visible(False)
+            a.tick_params(labelsize=12)
+        ax.set_ylim(-.5, max(components) + 1)
+        ax2.set_ylim(-.01, 1.01)
+        ax2.set_ylabel("Acceptance Rate", fontweight="bold", fontsize=14)
+        ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
+        ax.set_ylabel("Component", fontweight="bold", fontsize=14)
+        fig.tight_layout()
+        return fig, ax
+
+    def plot_eta_trace(self,
+                       components=None,
+                       fig=None,
+                       ax=None):
+        """
+
+        """
+        ## Get Paths
+        if components is None:
+            components = range(self.phi.shape[1])
+        paths = [(k,self._get_component_path(k)) for k in components]
+        ## Get Data
+        epochs = []
+        data = []
+        kvals = []
+        all_epochs = set()
+        for k, kpath in paths:
+            kvals.append(k)
+            kdata = np.zeros(len(kpath)) * np.nan
+            kepochs = np.zeros(len(kpath)) * np.nan
+            for j, kind in enumerate(kpath):
+                if kind is None:
+                    continue
+                kdata[j] = self._eta_cache[j][1][kind]
+                kepochs[j] = self._eta_cache[j][0]
+                all_epochs.add(kepochs[j])
+            epochs.append(kepochs)
+            data.append(kdata)
+        epochs = np.stack(epochs)
+        data = np.stack(data)
+        ## Plot
+        if fig is None or ax is None:
+            fig, ax = plt.subplots(figsize=(10,5.8))
+        for _, e, d in zip(kvals, epochs, data):
+            ax.plot(e, d, alpha=0.4, linewidth=2)
+        ax.set_xlim(0, np.nanmax(epochs)+1)
+        ax.set_ylim(0, np.nanmax(data)+0.01)
         ax.spines["right"].set_visible(False)
         ax.spines["top"].set_visible(False)
         ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
         ax.set_ylabel("Sample", fontweight="bold", fontsize=14)
         ax.tick_params(labelsize=12)
         fig.tight_layout()
+        return fig, ax
+
+    def plot_alpha_trace(self,
+                         epochs=None):
+        """
+
+        """
+        fig, ax = self._plot_concentration_trace("alpha", epochs=epochs)
+        return fig, ax
+    
+    def plot_gamma_trace(self,
+                         epochs=None):
+        """
+
+        """
+        fig, ax = self._plot_concentration_trace("gamma", epochs=epochs)
         return fig, ax
 
     def fit(self,
@@ -864,6 +1101,7 @@ class IDTM(TopicModel):
         self._phi_cache = []
         self._theta_cache = []
         self._eta_cache = []
+        self._acceptance_cache = []
         ## Inference Loop
         for iteration in range(self.n_iter):
             ## Run One Gibbs Iteration
@@ -880,6 +1118,8 @@ class IDTM(TopicModel):
                     self._gamma_cache.append((iteration, self.gamma.copy()))
                 if "eta" in self.cache_params:
                     self._eta_cache.append((iteration, self.m.sum(axis=0) / self.m.sum()))
+                if "acceptance" in self.cache_params:
+                    self._acceptance_cache.append((iteration, self._acceptance.copy()))
         ## Cache Final Theta
         self.theta = self._get_theta()
         return self
