@@ -229,8 +229,10 @@ class IDTM(TopicModel):
         if self._q == 1:
             self._phi_aux = self._phi_aux.reshape(1,-1)
         self._phi_aux_T = logistic_transform(self._phi_aux, axis=1, keepdims=True)
-        ## Clean Up and Initialize Component Tracking
-        self._component_map = [self._clean_up()]
+        ## Clean Up
+        _ = self._clean_up()
+        # and Initialize Component Tracking
+        self._component_map = [{i:None for i in range(self.m.shape[1])}]
 
     def _polynomial_expand(self,
                            a,
@@ -634,7 +636,15 @@ class IDTM(TopicModel):
                     self.gamma[epoch] = stats.gamma(self._gamma_0[0] + K - 1, scale = 1 / (self._gamma_0[1] - np.log(eta))).rvs()
         ## Remove Empty Components
         new_component_map = self._clean_up()
-        self._component_map.append(new_component_map)
+        ## Get Component Transition Map
+        new_component_map_r = {y:x for x, y in new_component_map.items()}
+        component_transition_map = {}
+        for active_k, previous_k in new_component_map_r.items():
+            if previous_k in k_ind_created:
+                component_transition_map[active_k] = None
+            else:
+                component_transition_map[active_k] = previous_k
+        self._component_map.append(component_transition_map)
         ####### Step 5: Sample Components phi_tk using Z
         n_accept = [0,0]
         for k in range(self.phi.shape[1]):
@@ -690,26 +700,6 @@ class IDTM(TopicModel):
             print("Gamma", self.gamma)
             print("Eta:", self.m.sum(axis=0))
 
-    def _get_component_path(self,
-                            k):
-        """
-        Retrieve the indices associated with a component across sampling epochs
-        after initialization
-        """
-        ## Reverse Mapping (Now Goes from index at iteration to index at previous iteration)
-        cmap_r = [{y:x for x, y in c.items()} for c in self._component_map]
-        ## Initialize
-        k_inds = [None for _ in range(len(cmap_r))]
-        ## Cycle Through
-        k_cur = k
-        for iteration in range(len(cmap_r))[::-1]:
-            if k_cur is None:
-                break
-            k_prev = cmap_r[iteration].get(k_cur,None)
-            k_inds[iteration] = k_cur
-            k_cur = k_prev
-        return k_inds[1:]
-    
     def _get_theta(self):
         """
 
@@ -722,6 +712,138 @@ class IDTM(TopicModel):
                 theta[document,k] += 1
         theta = self._l1_norm(theta, axis=1, keepdims=True)
         return theta
+
+    def _get_component_path(self,
+                            k):
+        """
+
+        """
+        k_inds = [None for _ in self._component_map]
+        k_inds[-1] = k
+        i = -1
+        while True and -i < len(self._component_map) :
+            previous_ind = self._component_map[i].get(k_inds[i],None)
+            k_inds[i-1] = previous_ind
+            i -= 1
+            if previous_ind is None:
+                break
+        k_inds = k_inds[1:]
+        return k_inds
+
+    def _plot_theta_trace(self,
+                          doc_id,
+                          top_k=None,
+                          fig=None,
+                          ax=None):
+        """
+
+        """
+        ## Get All Component Paths
+        m = len(self._theta_cache)
+        paths = [self._get_component_path(k) for k in range(self.theta.shape[1])]
+        ## Get Data
+        epochs = []
+        data = []
+        for k, p in enumerate(paths):
+            p_epochs = np.zeros(m) * np.nan
+            p_data = np.zeros(m) * np.nan
+            for iteration, k_ind in enumerate(p):
+                if k_ind is None:
+                    continue
+                mcmc_epoch, mcmc_data = self._theta_cache[iteration]
+                mcmc_data = mcmc_data[doc_id,k_ind]
+                p_epochs[iteration] = mcmc_epoch
+                p_data[iteration] = mcmc_data
+            epochs.append(p_epochs)
+            data.append(p_data)
+        ## Format
+        epochs = np.stack(epochs)
+        data = np.stack(data)
+        ## Identify Top K
+        components = range(data.shape[0])
+        if top_k is not None:
+            components = sorted(data.mean(axis=1).argsort()[-top_k:][::-1])
+        ## Make Figure
+        if fig is None or ax is None:
+            fig, ax = plt.subplots(figsize=(10,5.6))
+        for c in components:
+            ax.plot(epochs[c], data[c], alpha=0.4, linewidth=3)
+        ax.set_xlim(0, np.nanmax(epochs))
+        ax.set_ylim(bottom=0, top=np.nanmax(data) + 0.05)
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+        ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
+        ax.set_ylabel("Sample", fontweight="bold", fontsize=14)
+        ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        return fig, ax
+
+    def _plot_phi_trace(self,
+                        epoch,
+                        k,
+                        components=None,
+                        fig=None,
+                        ax=None):
+        """
+
+        """
+        ## Get Path
+        k_path = self._get_component_path(k)
+        ## Isolate Appropriate Data
+        data = []
+        epochs = []
+        for iteration, k_ind in enumerate(k_path):
+            if k_ind is None:
+                continue
+            mcmc_epoch, mcmc_data = self._phi_cache[iteration]
+            mcmc_data = mcmc_data[epoch,k_ind,:]
+            epochs.append(mcmc_epoch)
+            data.append(mcmc_data)
+        data = np.vstack(data)
+        ## Isolate Desired Components
+        if components is None:
+            components = range(data.shape[1])
+        ## Create Figure
+        if fig is None or ax is None:
+            fig, ax = plt.subplots(figsize=(10,5.6))
+        for component in components:
+            ax.plot(epochs, data[:,component],alpha=0.4)
+        ax.set_xlim(0, max(epochs))
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+        ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
+        ax.set_ylabel("Sample", fontweight="bold", fontsize=14)
+        ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        return fig, ax
+    
+    def _plot_concentration_trace(self,
+                                  parameter,
+                                  epochs=None,
+                                  fig=None,
+                                  ax=None):
+        """
+
+        """
+        cache = getattr(self, f"_{parameter}_cache",None)
+        if cache is None:
+            return None, None
+        mcmc_epochs = [c[0] for c in cache]
+        data = np.stack([c[1] for c in cache]).T
+        if epochs is None:
+            epochs = range(data.shape[0])
+        if fig is None or ax is None:
+            fig, ax = plt.subplots(figsize=(10,5.8))
+        for e in epochs:
+            ax.plot(mcmc_epochs, data[e], linewidth=2, alpha=0.4)
+        ax.set_xlim(0, max(mcmc_epochs))
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+        ax.set_xlabel("MCMC Iteration", fontweight="bold", fontsize=14)
+        ax.set_ylabel("Sample", fontweight="bold", fontsize=14)
+        ax.tick_params(labelsize=12)
+        fig.tight_layout()
+        return fig, ax
 
     def fit(self,
             X,
@@ -751,11 +873,11 @@ class IDTM(TopicModel):
                 if "theta" in self.cache_params:
                     self._theta_cache.append((iteration, self._get_theta()))
                 if "phi" in self.cache_params:
-                    self._phi_cache.append((iteration, self.phi))
+                    self._phi_cache.append((iteration, self.phi.copy()))
                 if "alpha" in self.cache_params:
-                    self._alpha_cache.append((iteration, self.alpha))
+                    self._alpha_cache.append((iteration, self.alpha.copy()))
                 if "gamma" in self.cache_params:
-                    self._gamma_cache.append((iteration, self.gamma))
+                    self._gamma_cache.append((iteration, self.gamma.copy()))
                 if "eta" in self.cache_params:
                     self._eta_cache.append((iteration, self.m.sum(axis=0) / self.m.sum()))
         ## Cache Final Theta
