@@ -340,11 +340,14 @@ def main():
     """
 
     """
+    ## Model Input
+    if len(sys.argv) == 1:
+        raise ValueError("Should pass model choice to script.")
     ## Generate Data
     data = generate_data(beta_0=1e-1,
                          beta_1=1e-1,
                          n_mu=100,
-                         m_mu=100,
+                         m_mu=20,
                          gamma=10)
     ## Number of Timepoints
     n_timepoints = max(data["data"]["t"]) + 1
@@ -359,104 +362,106 @@ def main():
     fig, ax = plot_vocabulary_evolution(data)
     fig.savefig(f"{OUTPUT_DIR}vocabulary_evolution.png",dpi=300)
     plt.close(fig)
+    ## Parse Command Line
+    model_type = sys.argv[1]
+    model = None
     # Fit Models
-    print("Fitting LDA Model")
-    lda = LDA(vocabulary=data["data"]["vocabulary"],
-              n_iter=10000,
-              n_sample=1000,
-              cache_params=["theta","phi","alpha"],
-              cache_rate=1,
-              verbose=True,
-              jobs=8,
-              k=6,
-              seed=42,
-              alpha=0.01,
-              eta=0.01)
-    lda = lda.fit(data["data"]["X"])
-    lda_infer, lda_ll = lda.theta, lda.ll
-    print("Fitting HDP Model")
-    hdp = HDP(vocabulary=data["data"]["vocabulary"],
-              n_iter=10000,
-              n_sample=1000,
-              cache_params=["theta","phi","alpha"],
-              cache_rate=1,
-              verbose=True,
-              jobs=8,
-              initial_k=6,
-              alpha=0.01,
-              eta=0.01,
-              threshold=0.01,
-              seed=42)
-    hdp = hdp.fit(data["data"]["X"])
-    hdp_infer, hdp_ll = hdp.theta, hdp.ll
-    print("Fitting DTM Model")
-    dtm = DTM(vocabulary=data["data"]["vocabulary"],
-              n_iter=10000,
-              n_sample=1000,
-              cache_params=["theta","phi","alpha"],
-              cache_rate=1,
-              verbose=True,
-              jobs=8,
-              t=n_timepoints,
-              k=6,
-              alpha_var=0.01,
-              eta_var=0.01,
-              phi_var=0.01,
-              seed=42)
-    dtm = dtm.fit(data["data"]["X"], labels=data["data"]["t"], labels_key="timepoint")
-    dtm_infer, dtm_ll = dtm.theta, dtm.ll
-    print("Fitting iDTM Model")
-    idtm = IDTM(vocabulary=data["data"]["vocabulary"],
-                initial_k=20,
-                initial_m=3,
-                alpha_0_a=.1,
-                alpha_0_b=10,
-                gamma_0_a=.1,
-                gamma_0_b=10,
-                sigma_0=1,
-                rho_0=1e-2,
-                delta=8,
-                lambda_0=10,
-                q=5,
-                t=n_timepoints,
-                q_dim=3,
-                alpha_filter=1,
-                gamma_filter=1,
-                n_filter=0,
-                threshold=None,
-                k_filter_frequency=None,
-                n_iter=10,
-                n_burn=1,
-                cache_rate=1,
-                cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
-                jobs=8,
-                seed=42,
-                verbose=True)
-    idtm = idtm.fit(data["data"]["X"], data["data"]["t"])
-    idtm_infer = idtm.theta
+    if sys.argv[1] == "lda":
+        print("Fitting LDA Model")
+        model = LDA(vocabulary=data["data"]["vocabulary"],
+                    n_iter=10000,
+                    n_sample=1000,
+                    cache_params=["theta","phi","alpha"],
+                    cache_rate=100,
+                    verbose=True,
+                    jobs=8,
+                    k=6,
+                    seed=42,
+                    alpha=0.01,
+                    eta=0.01)
+        model = model.fit(data["data"]["X"])
+        model_infer, model_ll = model.theta, model.ll
+    if sys.argv[1] == "hdp":
+        print("Fitting HDP Model")
+        model = HDP(vocabulary=data["data"]["vocabulary"],
+                    n_iter=10000,
+                    n_sample=1000,
+                    cache_params=["theta","phi","alpha"],
+                    cache_rate=100,
+                    verbose=True,
+                    jobs=8,
+                    initial_k=6,
+                    alpha=0.01,
+                    eta=0.01,
+                    threshold=0.01,
+                    seed=42)
+        model = model.fit(data["data"]["X"])
+        model_infer, model_ll = model.theta, model.ll
+    if sys.argv[1] == "dtm":
+        print("Fitting DTM Model")
+        model = DTM(vocabulary=data["data"]["vocabulary"],
+                    n_iter=10000,
+                    n_sample=1000,
+                    cache_params=["theta","phi","alpha"],
+                    cache_rate=100,
+                    verbose=True,
+                    jobs=8,
+                    t=n_timepoints,
+                    k=6,
+                    alpha_var=0.01,
+                    eta_var=0.01,
+                    phi_var=0.01,
+                    seed=42)
+        model = model.fit(data["data"]["X"], labels=data["data"]["t"], labels_key="timepoint")
+        model_infer, model_ll = model.theta, model.ll
+    if sys.argv[1] == "idtm":
+        print("Fitting iDTM Model")
+        model = IDTM(vocabulary=data["data"]["vocabulary"],
+                     initial_k=20,
+                     initial_m=3,
+                     alpha_0_a=.1,
+                     alpha_0_b=10,
+                     gamma_0_a=.1,
+                     gamma_0_b=10,
+                     sigma_0=1,
+                     rho_0=1e-2,
+                     delta=8,
+                     lambda_0=10,
+                     q=5,
+                     t=n_timepoints,
+                     q_dim=3,
+                     alpha_filter=1,
+                     gamma_filter=1,
+                     n_filter=0,
+                     threshold=None,
+                     k_filter_frequency=None,
+                     n_iter=500,
+                     n_burn=1,
+                     cache_rate=1,
+                     cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
+                     jobs=8,
+                     seed=42,
+                     verbose=True)
+        model = model.fit(data["data"]["X"], data["data"]["t"])
+        model_infer = model.theta
     ## Save Models and Trace Plots
-    for model, model_type in zip([lda,hdp,dtm,idtm],["lda","hdp","dtm","idtm"]):
-        ## Create Model Directory
-        _ = make_directory(f"{OUTPUT_DIR}{model_type}/", remove_existing=True)
-        ## Save Model
-        print("Saving {} Model".format(model_type.upper()))
-        _ = model.save(f"{OUTPUT_DIR}{model_type}/model.joblib")
-        ## Trace Plots
-        print("Generating Trace Plots for {} Model".format(model_type.upper()))
-        _ = plot_traces(model, model_type, random_seed=42)
-        ## Vocabulary Evolution
-        if isinstance(model, DTM) or isinstance(model, IDTM):
-            print("Generating Evolution Plots for {} Model".format(model_type.upper()))
-            _ = plot_evolution(model, model_type)
+    if model is None:
+        raise ValueError("Model selected is not available.")
+    ## Create Model Directory
+    _ = make_directory(f"{OUTPUT_DIR}{model_type}/", remove_existing=True)
+    ## Save Model
+    print("Saving {} Model".format(model_type.upper()))
+    _ = model.save(f"{OUTPUT_DIR}{model_type}/model.joblib")
+    ## Trace Plots
+    print("Generating Trace Plots for {} Model".format(model_type.upper()))
+    _ = plot_traces(model, model_type, random_seed=42)
+    ## Vocabulary Evolution
+    if isinstance(model, DTM) or isinstance(model, IDTM):
+        print("Generating Evolution Plots for {} Model".format(model_type.upper()))
+        _ = plot_evolution(model, model_type)
     
-    
-    # inf = data["data"]["theta"]
-    # inf = lda_infer
-    # inf = hdp_infer
-    # inf = dtm_infer
-    # inf = idtm_infer
 
-    # df = pd.DataFrame(np.hstack([data["data"]["t"].reshape(-1,1), inf]))
+    # df = pd.DataFrame(np.hstack([data["data"]["t"].reshape(-1,1), model_infer]))
     # df_agg = df.groupby(0).mean()
     # df_agg = df_agg.apply(lambda x: x/sum(x), axis=1)
 
