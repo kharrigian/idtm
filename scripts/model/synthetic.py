@@ -365,6 +365,7 @@ def main():
     ## Parse Command Line
     model_type = sys.argv[1]
     model = None
+    model_checkpoint_directory = f"{OUTPUT_DIR}{model_type}/"
     # Fit Models
     if sys.argv[1] == "lda":
         print("Fitting LDA Model")
@@ -379,7 +380,9 @@ def main():
                     seed=42,
                     alpha=0.01,
                     eta=0.01)
-        model = model.fit(data["data"]["X"])
+        model = model.fit(data["data"]["X"],
+                          checkpoint_location=model_checkpoint_directory,
+                          checkpoint_frequency=1000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "hdp":
         print("Fitting HDP Model")
@@ -395,7 +398,9 @@ def main():
                     eta=0.01,
                     threshold=0.01,
                     seed=42)
-        model = model.fit(data["data"]["X"])
+        model = model.fit(data["data"]["X"],
+                          checkpoint_location=model_checkpoint_directory,
+                          checkpoint_frequency=1000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "dtm":
         print("Fitting DTM Model")
@@ -412,7 +417,11 @@ def main():
                     eta_var=0.01,
                     phi_var=0.01,
                     seed=42)
-        model = model.fit(data["data"]["X"], labels=data["data"]["t"], labels_key="timepoint")
+        model = model.fit(data["data"]["X"],
+                          labels=data["data"]["t"],
+                          labels_key="timepoint",
+                          checkpoint_location=model_checkpoint_directory,
+                          checkpoint_frequency=1000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "idtm":
         print("Fitting iDTM Model")
@@ -430,19 +439,24 @@ def main():
                      q=5,
                      t=n_timepoints,
                      q_dim=3,
+                     q_var=10,
                      alpha_filter=1,
                      gamma_filter=1,
                      n_filter=0,
                      threshold=None,
                      k_filter_frequency=None,
-                     n_iter=500,
+                     batch_size=100,
+                     n_iter=5,
                      n_burn=1,
                      cache_rate=1,
                      cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
                      jobs=8,
                      seed=42,
                      verbose=True)
-        model = model.fit(data["data"]["X"], data["data"]["t"])
+        model = model.fit(data["data"]["X"],
+                          data["data"]["t"],
+                          checkpoint_location=model_checkpoint_directory,
+                          checkpoint_frequency=100)
         model_infer = model.theta
     ## Save Models and Trace Plots
     if model is None:

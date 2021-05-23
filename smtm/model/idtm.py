@@ -29,6 +29,7 @@ from .base import TopicModel
 from .helpers import (sample_categorical,
                       sample_multinomial,
                       logistic_transform)
+from ..util.helpers import chunks, make_directory
 
 #######################
 ### Globals
@@ -59,11 +60,13 @@ class IDTM(TopicModel):
                  q=5,
                  t=1,
                  q_dim=1,
+                 q_var=1,
                  alpha_filter=1,
                  gamma_filter=1,
                  n_filter=10,
                  threshold=0.01,
                  k_filter_frequency=None,
+                 batch_size=None,
                  binarize=False,
                  vocabulary=None,
                  n_iter=100,
@@ -84,18 +87,23 @@ class IDTM(TopicModel):
                          cache_params=cache_params,
                          jobs=jobs,
                          verbose=verbose)
-        ## Distribution Parameters
+        ## Initialization Parameters
         self._initial_k = initial_k
         self._initial_m = initial_m
+        ## Priors
         self._alpha_0 = (alpha_0_a, alpha_0_b)
         self._gamma_0 = (gamma_0_a, gamma_0_b)
         self._rho_0 = rho_0
         self._sigma_0 = sigma_0
+        ## Proposal Params
+        self._q_dim = q_dim
+        self._q_var = q_var
+        ## Training Params
         self._alpha_filter = alpha_filter
         self._gamma_filter = gamma_filter
         self._n_filter = n_filter
-        self._q_dim = q_dim
         self._threshold = threshold
+        self._batch_size = batch_size
         if self._threshold is None:
             self._threshold = 0
         self._k_filter_freq = k_filter_frequency
@@ -106,7 +114,7 @@ class IDTM(TopicModel):
         self._q = q
         ## Data Parameters
         self._t = t
-        self._binarize=binarize
+        self._binarize = binarize
         self._seed = seed
     
     def __repr__(self):
@@ -234,7 +242,7 @@ class IDTM(TopicModel):
         self._phi_aux_T = logistic_transform(self._phi_aux, axis=1, keepdims=True)
         ## Clean Up
         _ = self._clean_up()
-        # and Initialize Component Tracking
+        # Update Initialize Component Tracking
         self._component_map = [{i:None for i in range(self.m.shape[1])}]
 
     def _polynomial_expand(self,
@@ -333,8 +341,8 @@ class IDTM(TopicModel):
         h_ll = self._H.logpdf(phi_k[0])
         h_star_ll = self._H.logpdf(phi_k_star[0])
         ## Model Probabilities
-        q_ll = 0 if phi_k.shape[0] == 1 else q.score(phi_k)
-        q_star_ll = 0 if phi_k.shape[0] == 1 else q.score(phi_k_star)
+        q_ll = 0 if phi_k.shape[0] == 1 else q(phi_k)
+        q_star_ll = 0 if phi_k.shape[0] == 1 else q(phi_k_star)
         ## Compute Transition Probabilities
         emission_ll = []
         emission_star_ll = []
@@ -402,10 +410,14 @@ class IDTM(TopicModel):
     def _train(self,
                X,
                iteration,
+               batch,
+               batch_n,
                is_last=False):
         """
 
         """
+        ## Get Batch Indices
+        batch = set(batch)
         ## Check for Component Filtering
         k_filter_on = False
         if (self._k_filter_freq is not None and iteration % self._k_filter_freq == 0) or is_last:
@@ -420,8 +432,6 @@ class IDTM(TopicModel):
         self.m_kt_prime = np.zeros(self.m.shape)
         ## Iterate over time periods
         for epoch, epoch_docs in enumerate(self.rest2epoch):
-            ## Indices of Documents in Epoch
-            epoch_docs = self.rest2epoch[epoch]
             ## Compute m_kt' for the Epoch
             if epoch == 0:
                 pass
@@ -431,7 +441,7 @@ class IDTM(TopicModel):
                 self.m_kt_prime[epoch] = (self.m_kt_prime[epoch-1] + self.m[epoch-1]) * np.exp(-1 / self._lambda_0) - \
                                         self.m[epoch-(self._delta+1)] * np.exp(-(self._delta + 1) / self._lambda_0)
             ## Cycle Through Documents
-            for document in epoch_docs:
+            for document in list(filter(lambda d: d in batch, epoch_docs)):
                 for table, dish in enumerate(self.table2dish[document]):
                     ## Get Words Indices at Table
                     w_tdb = [w for w, t in zip(X[document], self.word2table[document]) if t == table]
@@ -510,7 +520,7 @@ class IDTM(TopicModel):
                         self.K_life[k_new_ind] = [epoch, epoch]
         ####### Step 2: Sample a Table b_tdi for Each Word x_tdi
         for epoch, epoch_docs in enumerate(self.rest2epoch):
-            for document in epoch_docs:
+            for document in list(filter(lambda d: d in batch, epoch_docs)):
                 for i, (x_tdi, b_tdi) in enumerate(zip(X[document],self.word2table[document])):
                     ## Current Component
                     k_current = self.table2dish[document][b_tdi]
@@ -661,24 +671,31 @@ class IDTM(TopicModel):
             v_k = v_k[born:die+1]
             ## Generate Proposal Distribution and Sample from It
             if phi_k.shape[0] == 1:
-                q = None
+                qfunc = None
                 phi_k_star = stats.multivariate_normal(phi_k[0], self._sigma_0).rvs()
             else:
-                nn_phi = len(phi_k.sum(axis=1).nonzero()[0])
-                q = GaussianHMM(n_components=max(min(self._q_dim, nn_phi // 3), 1),
-                                covariance_type="diag",
-                                n_iter=10,
-                                means_prior=0,
-                                covars_prior=self._sigma_0,
-                                random_state=self._seed,
-                                verbose=False)
-                q = q.fit(phi_k)
-                phi_k_star, _ = q.sample(phi_k.shape[0])
+                try:
+                    nn_phi = len(phi_k.sum(axis=1).nonzero()[0])
+                    q = GaussianHMM(n_components=max(min(self._q_dim, nn_phi // 3), 1),
+                                    covariance_type="diag",
+                                    n_iter=10,
+                                    means_prior=0,
+                                    covars_prior=self._q_var,
+                                    random_state=self._seed,
+                                    verbose=False)
+                    q = q.fit(phi_k)
+                    phi_k_star, _ = q.sample(phi_k.shape[0])
+                    qfunc = q.score
+                except:
+                    phi_k_star = np.zeros_like(phi_k)
+                    for e, epoch_component in enumerate(phi_k):
+                        phi_k_star[e] = stats.multivariate_normal(epoch_component, self._sigma_0).rvs()
+                    qfunc = lambda x: 0
             ## MH Step
             phi_k, accept = self._metropolis_hastings(phi_k,
                                                       phi_k_star,
                                                       v_k,
-                                                      q)
+                                                      qfunc)
             n_accept[0] += accept
             n_accept[1] += 1
             self._acceptance[k] = accept
@@ -696,11 +713,11 @@ class IDTM(TopicModel):
                 self.phi_T[:,k,:] = logistic_transform(phi_k, axis=1, keepdims=True)
         ## Update User on Training Progress
         if self.verbose:
-            print("\nIteration {} Complete\n".format(iteration+1)+"~"*50)
-            print("Acceptance:", n_accept[0] / n_accept[1])
+            print("\nIteration {} -- Batch {} Complete\n".format(iteration+1,batch_n)+"~"*50)
             print("# Components:", max(list(map(max,self.table2dish))))
             print("Max # Tables:", max(list(map(max,self.word2table))))
             print("Number of New Components Per Sampling Stage:", k_created)
+            print("Proposal Acceptance Rate:", n_accept[0] / n_accept[1])
             print("Alpha:", self.alpha)
             print("Gamma", self.gamma)
             print("Eta:", self.m.sum(axis=0))
@@ -1126,10 +1143,14 @@ class IDTM(TopicModel):
     
     def fit(self,
             X,
-            timepoints):
+            timepoints,
+            checkpoint_location=None,
+            checkpoint_frequency=100):
         """
 
         """
+        ## Set Random Seed
+        _ = np.random.seed(self._seed)
         ## Vocabulary Check
         if self.vocabulary is None:
             self.vocabulary = list(range(X.shape[1]))
@@ -1144,24 +1165,44 @@ class IDTM(TopicModel):
         self._theta_cache = []
         self._eta_cache = []
         self._acceptance_cache = []
+        self._current_iteration = 0
         ## Inference Loop
+        n_updates = 0
         for iteration in range(self.n_iter):
-            ## Run One Gibbs Iteration
-            _ = self._train(X, iteration, iteration==self.n_iter-1)
-            ## Caching
-            if self.cache_rate is not None and (iteration + 1) % self.cache_rate == 0:
-                if "theta" in self.cache_params:
-                    self._theta_cache.append((iteration, self._get_theta()))
-                if "phi" in self.cache_params:
-                    self._phi_cache.append((iteration, self.phi.copy()))
-                if "alpha" in self.cache_params:
-                    self._alpha_cache.append((iteration, self.alpha.copy()))
-                if "gamma" in self.cache_params:
-                    self._gamma_cache.append((iteration, self.gamma.copy()))
-                if "eta" in self.cache_params:
-                    self._eta_cache.append((iteration, self.m.sum(axis=0) / self.m.sum()))
-                if "acceptance" in self.cache_params:
-                    self._acceptance_cache.append((iteration, self._acceptance.copy()))
+            if self.verbose:
+                print("~"*50 + f"\nBeginning Iteration {iteration}\n" + "~" * 50)            
+            ## Sample Batches
+            sample_indices = list(range(len(X)))
+            if self._batch_size is None:
+                batches = [sample_indices]
+            else:
+                np.random.shuffle(sample_indices)
+                batches = list(chunks(sample_indices, self._batch_size))
+            ## Train in Batches
+            for b, batch in enumerate(batches):
+                ## Run One Gibbs Iteration
+                _ = self._train(X, iteration, batch, b+1, iteration==self.n_iter-1)
+                ## Caching
+                if self.cache_rate is not None and (n_updates + 1) % self.cache_rate == 0:
+                    if "theta" in self.cache_params:
+                        self._theta_cache.append((n_updates, self._get_theta()))
+                    if "phi" in self.cache_params:
+                        self._phi_cache.append((n_updates, self.phi.copy()))
+                    if "alpha" in self.cache_params:
+                        self._alpha_cache.append((n_updates, self.alpha.copy()))
+                    if "gamma" in self.cache_params:
+                        self._gamma_cache.append((n_updates, self.gamma.copy()))
+                    if "eta" in self.cache_params:
+                        self._eta_cache.append((n_updates, self.m.sum(axis=0) / self.m.sum()))
+                    if "acceptance" in self.cache_params:
+                        self._acceptance_cache.append((n_updates, self._acceptance.copy()))
+                ## Checkpoint
+                if checkpoint_location is not None and (n_updates + 1) % checkpoint_frequency == 0:
+                    _ = make_directory(checkpoint_location)
+                    _ = self.save(f"{checkpoint_location}/model.joblib")
+                ## Increase Update Counter (Minibatches)
+                n_updates += 1
+                self._current_iteration += 1
         ## Cache Final Theta
         self.theta = self._get_theta()
         return self

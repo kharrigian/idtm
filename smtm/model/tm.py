@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 
 ## Local
 from .base import TopicModel
+from ..util.helpers import make_directory
 
 ###################
 ### Globals
@@ -260,7 +261,9 @@ class BaseTomotopy(TopicModel):
     def fit(self,
             X,
             labels=None,
-            labels_key=None):
+            labels_key=None,
+            checkpoint_location=None,
+            checkpoint_frequency=100):
         """
 
         """
@@ -275,6 +278,7 @@ class BaseTomotopy(TopicModel):
         self._eta = []
         self._ll = []
         ## Fit Model
+        self._current_iteration = 0
         for iteration in self._wrapper(range(self.n_iter), total=self.n_iter, desc="MCMC Iteration"):
             self.model.train(1, workers=self.jobs)
             self._ll.append((iteration, self.model.ll_per_word))
@@ -290,6 +294,10 @@ class BaseTomotopy(TopicModel):
                     self._theta.append((iteration, theta_iter))
                 if "alpha" in self.cache_params:
                     self._alpha.append((iteration, self.model.alpha))
+            self._current_iteration += 1
+            if checkpoint_location is not None and (iteration + 1) % checkpoint_frequency == 0:
+                _ = make_directory(checkpoint_location, remove_existing=False)
+                _ = self.save(f"{checkpoint_location}model.joblib")
         ## Cache Final Parameters
         if isinstance(self.model, tp.DTModel):
             self.phi = np.stack([np.vstack([self.model.get_topic_word_dist(topic,timepoint) for topic in range(self.model.k)]) for timepoint in range(self.model.num_timepoints)])
