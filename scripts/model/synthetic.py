@@ -248,7 +248,10 @@ def plot_traces(model,
     ## Model Awareness
     is_dynamic = isinstance(model, DTM) or isinstance(model, IDTM)
     n_plot_topics = model.theta.shape[1]
-    n_plot_terms = len(model.model.used_vocabs)
+    if not isinstance(model, IDTM):
+        n_plot_terms = len(model.model.used_vocabs)
+    else:
+        n_plot_terms = model.V
     n_dims = model.phi.shape[1] if is_dynamic else model.phi.shape[0]
     ## Get Epochs and Params
     trace_epochs = [None] if not is_dynamic else range(model.phi.shape[0])
@@ -268,16 +271,39 @@ def plot_traces(model,
             if figure is not None:
                 figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/theta_{doc_id}.png", dpi=100)
                 plt.close(figure[0])
-    ## Alpha and Phi Traces
-    for epoch in tqdm(trace_epochs, desc="Alpha and Phi Trace Plots", file=sys.stdout):
+    ## Acceptance Trace (iDTM only)
+    if isinstance(model, IDTM):
+        figure = model.plot_acceptance_trace()
+        if figure is not None:
+            figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/acceptance.png", dpi=100)
+            plt.close(figure[0])
+    ## Eta (iDTM only)
+    if "eta" in trace_params and isinstance(model, IDTM):
+        figure = model.plot_eta_trace()
+        if figure is not None:
+            figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/eta.png", dpi=100)
+            plt.close(figure[0])
+    ## Alpha, Gamma, and Phi Traces
+    for epoch in tqdm(trace_epochs, desc="Alpha, Gamma, and Phi Trace Plots", file=sys.stdout):
         epoch_name = epoch if epoch is not None else "all"
-        if "alpha" not in trace_params and "phi" not in trace_params:
+        if not any(i in trace_params for i in ["alpha","gamma","phi","eta"]):
             continue
         if "alpha" in trace_params:
-            figure = model.plot_alpha_trace(epoch=epoch,
-                                            top_k_topics=n_plot_topics)
+            if not isinstance(model, IDTM):
+                figure = model.plot_alpha_trace(epoch=epoch,
+                                                top_k_topics=n_plot_topics)
+                if figure is not None:
+                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
+                    plt.close(figure[0])
+            else:
+                figure = model.plot_alpha_trace(epochs=[epoch])
+                if figure is not None:
+                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
+                    plt.close(figure[0])
+        if "gamma" in trace_params and isinstance(model, IDTM):
+            figure = model.plot_gamma_trace(epochs=[epoch])
             if figure is not None:
-                figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
+                figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/gamma_{epoch_name}.png", dpi=100)
                 plt.close(figure[0])
         if "phi" in trace_params:
             for kdim in range(n_dims):
@@ -288,21 +314,37 @@ def plot_traces(model,
                     figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
                     plt.close(figure[0])
 
+def plot_evolution(model,
+                   model_type):
+    """
+
+    """
+    ## Model Awareness
+    n_plot_topics = model.theta.shape[1]
+    if not isinstance(model, IDTM):
+        n_plot_terms = len(model.model.used_vocabs)
+    else:
+        n_plot_terms = model.V
+    ## Directory
+    _ = make_directory(f"{OUTPUT_DIR}{model_type}/vocabulary_evolution/", remove_existing=True)
+    ## Cycle Through Components
+    for component in tqdm(range(n_plot_topics), desc="Evolution Plots", file=sys.stdout, total=n_plot_topics):
+        figure = model.plot_topic_evolution(topic_id=component,
+                                            top_k_terms=n_plot_terms,
+                                            top_k_type=np.nanmean)
+        if figure is not None:
+            figure[0].savefig(f"{OUTPUT_DIR}{model_type}/vocabulary_evolution/topic_{component}.png",dpi=100)
+            plt.close(figure[0])
+    
 def main():
     """
 
     """
-    # ## Generate Data
-    # data = generate_data(beta_0=1e-1,
-    #                      beta_1=1e-1,
-    #                      n_mu=100,
-    #                      m_mu=100,
-    #                      gamma=10)
     ## Generate Data
     data = generate_data(beta_0=1e-1,
                          beta_1=1e-1,
-                         n_mu=25,
-                         m_mu=5,
+                         n_mu=100,
+                         m_mu=100,
                          gamma=10)
     ## Number of Timepoints
     n_timepoints = max(data["data"]["t"]) + 1
@@ -317,54 +359,53 @@ def main():
     fig, ax = plot_vocabulary_evolution(data)
     fig.savefig(f"{OUTPUT_DIR}vocabulary_evolution.png",dpi=300)
     plt.close(fig)
-    # ## Fit Models
-    # print("Fitting LDA Model")
-    # lda = LDA(vocabulary=data["data"]["vocabulary"],
-    #           n_iter=10000,
-    #           n_sample=1000,
-    #           cache_params=["theta","phi","alpha"],
-    #           cache_rate=1,
-    #           verbose=True,
-    #           jobs=8,
-    #           k=6,
-    #           seed=42,
-    #           alpha=0.01,
-    #           eta=0.01)
-    # lda = lda.fit(data["data"]["X"])
-    # lda_infer, lda_ll = lda.theta, lda.ll
-    # print("Fitting HDP Model")
-    # hdp = HDP(vocabulary=data["data"]["vocabulary"],
-    #           n_iter=10000,
-    #           n_sample=1000,
-    #           cache_params=["theta","phi","alpha"],
-    #           cache_rate=1,
-    #           verbose=True,
-    #           jobs=8,
-    #           initial_k=6,
-    #           alpha=0.01,
-    #           eta=0.01,
-    #           threshold=0.01,
-    #           seed=42)
-    # hdp = hdp.fit(data["data"]["X"])
-    # hdp_infer, hdp_ll = hdp.theta, hdp.ll
-    # print("Fitting DTM Model")
-    # dtm = DTM(vocabulary=data["data"]["vocabulary"],
-    #           n_iter=10000,
-    #           n_sample=1000,
-    #           cache_params=["theta","phi","alpha"],
-    #           cache_rate=1,
-    #           verbose=True,
-    #           jobs=8,
-    #           t=n_timepoints,
-    #           k=6,
-    #           alpha_var=0.01,
-    #           eta_var=0.01,
-    #           phi_var=0.01,
-    #           seed=42)
-    # dtm = dtm.fit(data["data"]["X"], labels=data["data"]["t"], labels_key="timepoint")
-    # dtm_infer, dtm_ll = dtm.theta, dtm.ll
+    # Fit Models
+    print("Fitting LDA Model")
+    lda = LDA(vocabulary=data["data"]["vocabulary"],
+              n_iter=10000,
+              n_sample=1000,
+              cache_params=["theta","phi","alpha"],
+              cache_rate=1,
+              verbose=True,
+              jobs=8,
+              k=6,
+              seed=42,
+              alpha=0.01,
+              eta=0.01)
+    lda = lda.fit(data["data"]["X"])
+    lda_infer, lda_ll = lda.theta, lda.ll
+    print("Fitting HDP Model")
+    hdp = HDP(vocabulary=data["data"]["vocabulary"],
+              n_iter=10000,
+              n_sample=1000,
+              cache_params=["theta","phi","alpha"],
+              cache_rate=1,
+              verbose=True,
+              jobs=8,
+              initial_k=6,
+              alpha=0.01,
+              eta=0.01,
+              threshold=0.01,
+              seed=42)
+    hdp = hdp.fit(data["data"]["X"])
+    hdp_infer, hdp_ll = hdp.theta, hdp.ll
+    print("Fitting DTM Model")
+    dtm = DTM(vocabulary=data["data"]["vocabulary"],
+              n_iter=10000,
+              n_sample=1000,
+              cache_params=["theta","phi","alpha"],
+              cache_rate=1,
+              verbose=True,
+              jobs=8,
+              t=n_timepoints,
+              k=6,
+              alpha_var=0.01,
+              eta_var=0.01,
+              phi_var=0.01,
+              seed=42)
+    dtm = dtm.fit(data["data"]["X"], labels=data["data"]["t"], labels_key="timepoint")
+    dtm_infer, dtm_ll = dtm.theta, dtm.ll
     print("Fitting iDTM Model")
-    n_timepoints = max(data["data"]["t"]) + 1
     idtm = IDTM(vocabulary=data["data"]["vocabulary"],
                 initial_k=20,
                 initial_m=3,
@@ -372,8 +413,8 @@ def main():
                 alpha_0_b=10,
                 gamma_0_a=.1,
                 gamma_0_b=10,
-                sigma_0=100,
-                rho_0=1e-4,
+                sigma_0=1,
+                rho_0=1e-2,
                 delta=8,
                 lambda_0=10,
                 q=5,
@@ -381,25 +422,34 @@ def main():
                 q_dim=3,
                 alpha_filter=1,
                 gamma_filter=1,
-                n_filter=10,
-                threshold=0.001,
+                n_filter=0,
+                threshold=None,
                 k_filter_frequency=None,
-                n_iter=50,
-                n_burn=100,
+                n_iter=10,
+                n_burn=1,
                 cache_rate=1,
-                cache_params=set(["alpha","gamma","phi","theta","eta"]),
+                cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
                 jobs=8,
                 seed=42,
                 verbose=True)
     idtm = idtm.fit(data["data"]["X"], data["data"]["t"])
     idtm_infer = idtm.theta
-    import pdb; pdb.set_trace()
-
-    # ## Trace Plots
-    # for model, model_type in zip([lda,hdp,dtm],["lda","hdp","dtm"]):
-    #     print("Generating Plots for {} Model".format(model_type.upper()))
-    #     _ = plot_traces(model, model_type, random_seed=42)
-
+    ## Save Models and Trace Plots
+    for model, model_type in zip([lda,hdp,dtm,idtm],["lda","hdp","dtm","idtm"]):
+        ## Create Model Directory
+        _ = make_directory(f"{OUTPUT_DIR}{model_type}/", remove_existing=True)
+        ## Save Model
+        print("Saving {} Model".format(model_type.upper()))
+        _ = model.save(f"{OUTPUT_DIR}{model_type}/model.joblib")
+        ## Trace Plots
+        print("Generating Trace Plots for {} Model".format(model_type.upper()))
+        _ = plot_traces(model, model_type, random_seed=42)
+        ## Vocabulary Evolution
+        if isinstance(model, DTM) or isinstance(model, IDTM):
+            print("Generating Evolution Plots for {} Model".format(model_type.upper()))
+            _ = plot_evolution(model, model_type)
+    
+    
     # inf = data["data"]["theta"]
     # inf = lda_infer
     # inf = hdp_infer
