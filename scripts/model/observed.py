@@ -36,7 +36,7 @@ MODEL_PARAMS = {
     "cache_rate":10,
     "cache_params":set(["alpha","phi","theta"]),
             
-    "n_iter":10,
+    "n_iter":1000,
     "n_burn":1,
     "jobs":8,
     "verbose":True,
@@ -425,7 +425,7 @@ def plot_traces(model,
     trace_params = model.cache_params
     ## Directory Setup Or Early Exit
     if len(trace_params) > 0:
-        _ = make_directory(f"{OUTPUT_DIR}{model_type}/trace/", remove_existing=True)
+        _ = make_directory(f"{OUTPUT_DIR}/trace/", remove_existing=True)
     else:
         return None
     ## Document Traces
@@ -436,19 +436,19 @@ def plot_traces(model,
         for doc_id in tqdm(doc_ids, desc="Document-Topic Trace Plots", file=sys.stdout):
             figure = model.plot_document_trace(doc_id, n_plot_topics)
             if figure is not None:
-                figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/theta_{doc_id}.png", dpi=100)
+                figure[0].savefig(f"{OUTPUT_DIR}/trace/theta_{doc_id}.png", dpi=100)
                 plt.close(figure[0])
     ## Acceptance Trace (iDTM only)
     if isinstance(model, IDTM):
         figure = model.plot_acceptance_trace()
         if figure is not None:
-            figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/acceptance.png", dpi=100)
+            figure[0].savefig(f"{OUTPUT_DIR}/trace/acceptance.png", dpi=100)
             plt.close(figure[0])
     ## Eta (iDTM only)
     if "eta" in trace_params and isinstance(model, IDTM):
         figure = model.plot_eta_trace()
         if figure is not None:
-            figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/eta.png", dpi=100)
+            figure[0].savefig(f"{OUTPUT_DIR}/trace/eta.png", dpi=100)
             plt.close(figure[0])
     ## Alpha, Gamma, and Phi Traces
     for epoch in tqdm(trace_epochs, desc="Alpha, Gamma, and Phi Trace Plots", file=sys.stdout):
@@ -460,17 +460,17 @@ def plot_traces(model,
                 figure = model.plot_alpha_trace(epoch=epoch,
                                                 top_k_topics=n_plot_topics)
                 if figure is not None:
-                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
+                    figure[0].savefig(f"{OUTPUT_DIR}/trace/alpha_{epoch_name}.png", dpi=100)
                     plt.close(figure[0])
             else:
                 figure = model.plot_alpha_trace(epochs=[epoch])
                 if figure is not None:
-                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
+                    figure[0].savefig(f"{OUTPUT_DIR}/trace/alpha_{epoch_name}.png", dpi=100)
                     plt.close(figure[0])
         if "gamma" in trace_params and isinstance(model, IDTM):
             figure = model.plot_gamma_trace(epochs=[epoch])
             if figure is not None:
-                figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/gamma_{epoch_name}.png", dpi=100)
+                figure[0].savefig(f"{OUTPUT_DIR}/trace/gamma_{epoch_name}.png", dpi=100)
                 plt.close(figure[0])
         if "phi" in trace_params:
             for kdim in range(n_dims):
@@ -478,7 +478,7 @@ def plot_traces(model,
                                                 epoch=epoch,
                                                 top_k_terms=n_plot_terms)
                 if figure is not None:
-                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
+                    figure[0].savefig(f"{OUTPUT_DIR}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
                     plt.close(figure[0])
 
 def plot_topic_evolution(model):
