@@ -473,14 +473,17 @@ def main():
     if isinstance(model, DTM) or isinstance(model, IDTM):
         print("Generating Evolution Plots for {} Model".format(model_type.upper()))
         _ = plot_evolution(model, model_type)
-    
-
-    # df = pd.DataFrame(np.hstack([data["data"]["t"].reshape(-1,1), model_infer]))
-    # df_agg = df.groupby(0).mean()
-    # df_agg = df_agg.apply(lambda x: x/sum(x), axis=1)
-
-    # plt.imshow(df_agg.T, aspect="auto", cmap=plt.cm.Reds)
-    # plt.show()
+    ## Learned Topic Distribution Over Epochs
+    df = pd.DataFrame(np.hstack([data["data"]["t"].reshape(-1,1), model_infer]))
+    df_agg = df.groupby(0).mean()
+    df_agg = df_agg.apply(lambda x: x/sum(x), axis=1)
+    ## Make Plot
+    plt.imshow(df_agg.T, aspect="auto", cmap=plt.cm.Reds)
+    plt.xlabel("Epoch", fontweight="bold")
+    plt.ylabel("Component", fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(f"{OUTPUT_DIR}{model_type}topic_recovery.png", dpi=100)
+    plt.close()
 
     
 
