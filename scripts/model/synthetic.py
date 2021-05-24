@@ -370,10 +370,10 @@ def main():
     if sys.argv[1] == "lda":
         print("Fitting LDA Model")
         model = LDA(vocabulary=data["data"]["vocabulary"],
-                    n_iter=10000,
+                    n_iter=50000,
                     n_sample=1000,
                     cache_params=["theta","phi","alpha"],
-                    cache_rate=100,
+                    cache_rate=1,
                     verbose=True,
                     jobs=8,
                     k=6,
@@ -387,10 +387,10 @@ def main():
     if sys.argv[1] == "hdp":
         print("Fitting HDP Model")
         model = HDP(vocabulary=data["data"]["vocabulary"],
-                    n_iter=10000,
+                    n_iter=50000,
                     n_sample=1000,
                     cache_params=["theta","phi","alpha"],
-                    cache_rate=100,
+                    cache_rate=1,
                     verbose=True,
                     jobs=8,
                     initial_k=6,
@@ -405,10 +405,10 @@ def main():
     if sys.argv[1] == "dtm":
         print("Fitting DTM Model")
         model = DTM(vocabulary=data["data"]["vocabulary"],
-                    n_iter=10000,
+                    n_iter=50000,
                     n_sample=1000,
                     cache_params=["theta","phi","alpha"],
-                    cache_rate=100,
+                    cache_rate=1,
                     verbose=True,
                     jobs=8,
                     t=n_timepoints,
@@ -426,7 +426,7 @@ def main():
     if sys.argv[1] == "idtm":
         print("Fitting iDTM Model")
         model = IDTM(vocabulary=data["data"]["vocabulary"],
-                     initial_k=20,
+                     initial_k=6,
                      initial_m=3,
                      alpha_0_a=.1,
                      alpha_0_b=10,
@@ -482,7 +482,7 @@ def main():
     plt.xlabel("Epoch", fontweight="bold")
     plt.ylabel("Component", fontweight="bold")
     plt.tight_layout()
-    plt.savefig(f"{OUTPUT_DIR}{model_type}topic_recovery.png", dpi=100)
+    plt.savefig(f"{OUTPUT_DIR}{model_type}/topic_recovery.png", dpi=100)
     plt.close()
 
     
