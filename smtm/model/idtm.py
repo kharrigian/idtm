@@ -147,7 +147,10 @@ class IDTM(TopicModel):
             X = sparse.csr_matrix(X)
         ## Make Term List
         mp = Pool(self.jobs)
-        A = list(mp.imap_unordered(self._sparse_to_list, enumerate(X)))
+        A = list(tqdm(mp.imap_unordered(self._sparse_to_list, enumerate(X)),
+                 desc="Formatting Data Matrix",
+                 file=sys.stdout,
+                 total=X.shape[0]))
         _ = mp.close()
         ## Sort
         A = list(map(lambda i: i[1], sorted(A, key=lambda x: x[0])))
@@ -174,10 +177,11 @@ class IDTM(TopicModel):
         """
 
         """
+        print("Initializing Bookkeeping...")
         ## Vocabulary Size
         self.V = len(self.vocabulary)
         ## Initialize Random Table Assignments For Each Word [n x w_n]
-        self.word2table = [[np.random.randint(self._initial_m) for _ in x] for x in X]
+        self.word2table = [list(np.random.choice(self._initial_m, size=len(x))) for x in X]
         ## Initialize Random Dish Assignments for Each Table [n x m_n]
         self.table2dish = [[np.random.randint(self._initial_k) for _ in range(self._initial_m)] for _ in X]
         ## Epoch Associated with Each Document
@@ -185,12 +189,13 @@ class IDTM(TopicModel):
         for i, t in enumerate(timepoints):
             self.rest2epoch[t].append(i)
         ## Space for Sampling
-        initial_kmax = max(self.V // 2, self._initial_k)
+        initial_kmax = self._initial_k + self._initial_k // 4
         initial_mmax = max(max(list(map(len,X))) // 2, self._initial_m)
         ## Table and Component Counts (m: [t x k_max], n: [n x m_max])
-        self.m = np.array([[0 for _ in range(initial_kmax)] for _ in range(self._t)], dtype=np.int)
+        print("Initializing Counts")
+        self.m = np.zeros((self._t, initial_kmax), dtype=np.int)
         self.m_kt_prime = np.zeros(self.m.shape)
-        self.n = np.array([[0 for _ in range(initial_mmax)] for _ in X], dtype=np.int)
+        self.n = np.zeros((len(X), initial_mmax), dtype=np.int)
         for epoch, documents in enumerate(self.rest2epoch):
             for d in documents:
                 for dish_k in self.table2dish[d]:
@@ -204,15 +209,16 @@ class IDTM(TopicModel):
                 continue
             self.K_life[k] = [(self.m[:,k] != 0).nonzero()[0].min(), (self.m[:,k] != 0).nonzero()[0].max()]
         ## Initialize Base Distribution
-        self._H = stats.multivariate_normal([0] * self.V, self._sigma_0)
+        print("Initializing Components")
+        self._H = stats.multivariate_normal(np.zeros(self.V), self._sigma_0)
         ## Initialize Components [t x k_max x V]
         self.phi = np.zeros((self._t, initial_kmax, self.V))
         self.phi[0] = self._H.rvs(initial_kmax)
         if initial_kmax == 1:
             self.phi[0] = self.phi[0].reshape(1,-1)
-        for epoch in range(1, self._t):
+        for epoch in tqdm(range(1, self._t), position=0, leave=True, desc="Epoch", total=self._t-1):
             self.phi[epoch] = np.zeros(self.phi[0].shape)
-            for k, comp in enumerate(self.phi[epoch-1]):
+            for k, comp in tqdm(enumerate(self.phi[epoch-1]), desc="Dimension", position=1, leave=False, total=self.phi[epoch-1].shape[0]):
                 self.phi[epoch][k] = stats.multivariate_normal(comp, self._rho_0).rvs()
         self.phi = np.stack(self.phi)
         ## Transform Components
@@ -431,7 +437,7 @@ class IDTM(TopicModel):
         ## Reset m'
         self.m_kt_prime = np.zeros(self.m.shape)
         ## Iterate over time periods
-        for epoch, epoch_docs in enumerate(self.rest2epoch):
+        for epoch, epoch_docs in tqdm(enumerate(self.rest2epoch), desc="Sampling Topic Assignments", total=len(self.rest2epoch), file=sys.stdout):
             ## Compute m_kt' for the Epoch
             if epoch == 0:
                 pass
@@ -474,6 +480,8 @@ class IDTM(TopicModel):
                         p_k_new = p_k_new * 0
                     ## Merge Distribution and Normalize
                     p_k_all = np.hstack([p_k_not_new, p_k_new])
+                    if p_k_all.sum() == 0:
+                        continue
                     p_k_all = p_k_all / p_k_all.sum()
                     ## TODO: Figure out transition probability term for reweighting K_potential
                     ## Sample Topic
@@ -519,7 +527,7 @@ class IDTM(TopicModel):
                         ## Add to Live Components
                         self.K_life[k_new_ind] = [epoch, epoch]
         ####### Step 2: Sample a Table b_tdi for Each Word x_tdi
-        for epoch, epoch_docs in enumerate(self.rest2epoch):
+        for epoch, epoch_docs in tqdm(enumerate(self.rest2epoch), total=len(self.rest2epoch), desc="Sampling Tables", file=sys.stdout, position=0, leave=True):
             for document in list(filter(lambda d: d in batch, epoch_docs)):
                 for i, (x_tdi, b_tdi) in enumerate(zip(X[document],self.word2table[document])):
                     ## Current Component
@@ -576,6 +584,8 @@ class IDTM(TopicModel):
                             p_k_new = p_k_new * 0
                         ## Construct Sample Probability
                         p_k_all = np.hstack([p_k_not_new, p_k_new])
+                        if p_k_all.sum() == 0:
+                            continue
                         p_k_all = p_k_all / p_k_all.sum()
                         ## Sample Component
                         k_sampled = sample_categorical(p_k_all)
@@ -624,6 +634,7 @@ class IDTM(TopicModel):
                             self._phi_aux[k_aux] = self._H.rvs()
                             self._phi_aux_T[k_aux] = logistic_transform(self._phi_aux[k_aux])
         ## Filtering Mode
+        print("Sampling Concentration Parameters")
         if iteration < self._n_filter:
             self.alpha = self._alpha_filter * np.ones(self._t)
             self.gamma = self._gamma_filter * np.ones(self._t)
@@ -661,7 +672,7 @@ class IDTM(TopicModel):
         ####### Step 5: Sample Components phi_tk using Z
         n_accept = [0,0]
         self._acceptance = np.zeros(self.phi.shape[1])
-        for k in range(self.phi.shape[1]):
+        for k in tqdm(range(self.phi.shape[1]), desc="Sampling Components", file=sys.stdout, total=self.phi.shape[1]):
             ## Isolate Existing Variables
             phi_k = self.phi[:,k,:]
             v_k = self.Z[:,k,:]
