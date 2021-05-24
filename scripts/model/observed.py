@@ -8,7 +8,7 @@ Real Data Modeling
 #####################
 
 ## Experiment Output Directory
-OUTPUT_DIR = "./data/results/observed/dtm/"
+OUTPUT_DIR = "./data/results/observed/idtm/"
 
 ## Data
 DATA_DIR = "./data/processed/depression/"
@@ -22,26 +22,49 @@ MIN_VOCAB_CF = 100
 MIN_WORDS_PER_DOCUMENT = 25
 
 ## Topic Model Parameters
-MODEL_TYPE = "dtm"
+MODEL_TYPE = "idtm"
 MODEL_PARAMS = {
+
+    # "k":50,
+    # "rm_top":100,
 
     # "alpha":0.1,
     # "eta":0.1,
 
-    "alpha_var":0.001,
-    "eta_var":0.001,
-    "phi_var":0.001,
+    # "alpha_var":0.001,
+    # "eta_var":0.001,
+    # "phi_var":0.001,
 
-    "rm_top":100,
-    "k":50,
-    "n_iter":25000,
-    "n_burn":100,
+    "initial_k":10,
+    "initial_m":3,
+    "alpha_0_a":1,
+    "alpha_0_b":1,
+    "gamma_0_a":1,
+    "gamma_0_b":1,
+    "sigma_0":100,
+    "rho_0":10,
+    "delta":8,
+    "lambda_0":10,
+    "q":5,
+    "q_dim":3,
+    "q_var":10,
+    "alpha_filter":None,
+    "gamma_filter":None,
+    "n_filter":0,
+    "threshold":None,
+    "k_filter_frequency":None,
+    "batch_size":1000,
+
     "cache_rate":10,
-    "cache_params":set(["phi","alpha"]),
+    "cache_params":set(["alpha","gamma","phi","theta","eta","acceptance"]),
+            
+    "n_iter":1,
+    "n_burn":1,
     "jobs":8,
     "verbose":True,
     "seed":42,
 }
+CHECKPOINT_FREQUENCY = 10
 
 ## Aggregation into Epochs
 AGG_RATE = "3MO"
@@ -203,6 +226,7 @@ def load_document_term(output_dir):
     """
 
     """
+    print("Loading Data From: {}".format(output_dir))
     ## Establish Filenames and Check Existence
     X_filename = f"{output_dir}/data.npz"
     post_ids_filename = f"{output_dir}/posts.txt"
@@ -393,7 +417,9 @@ def plot_proportions_stacked(prop_mu,
     fig.autofmt_xdate()
     return fig, ax
 
+
 def plot_traces(model,
+                model_type,
                 random_seed=42):
     """
 
@@ -402,37 +428,63 @@ def plot_traces(model,
     _ = np.random.seed(random_seed)
     ## Model Awareness
     is_dynamic = isinstance(model, DTM) or isinstance(model, IDTM)
-    n_plot_topics = min(MAX_PLOT_TOPICS, model.theta.shape[1])
-    n_plot_terms = min(MAX_PLOT_TERMS, len(model.model.used_vocabs))
+    n_plot_topics = model.theta.shape[1]
+    if not isinstance(model, IDTM):
+        n_plot_terms = len(model.model.used_vocabs)
+    else:
+        n_plot_terms = model.V
     n_dims = model.phi.shape[1] if is_dynamic else model.phi.shape[0]
     ## Get Epochs and Params
     trace_epochs = [None] if not is_dynamic else range(model.phi.shape[0])
     trace_params = model.cache_params
     ## Directory Setup Or Early Exit
     if len(trace_params) > 0:
-        _ = make_directory(f"{OUTPUT_DIR}plots/trace/", remove_existing=True)
+        _ = make_directory(f"{OUTPUT_DIR}{model_type}/trace/", remove_existing=True)
     else:
         return None
     ## Document Traces
     if "theta" in trace_params:
         doc_ids = np.random.choice(model.theta.shape[0],
-                                   min(N_DOC_TOPIC_PLOTS, n_dims),
+                                   10,
                                    replace=False)
         for doc_id in tqdm(doc_ids, desc="Document-Topic Trace Plots", file=sys.stdout):
             figure = model.plot_document_trace(doc_id, n_plot_topics)
             if figure is not None:
-                figure[0].savefig(f"{OUTPUT_DIR}plots/trace/theta_{doc_id}.png", dpi=100)
+                figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/theta_{doc_id}.png", dpi=100)
                 plt.close(figure[0])
-    ## Alpha and Phi Traces
-    for epoch in tqdm(trace_epochs, desc="Alpha and Phi Trace Plots", file=sys.stdout):
+    ## Acceptance Trace (iDTM only)
+    if isinstance(model, IDTM):
+        figure = model.plot_acceptance_trace()
+        if figure is not None:
+            figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/acceptance.png", dpi=100)
+            plt.close(figure[0])
+    ## Eta (iDTM only)
+    if "eta" in trace_params and isinstance(model, IDTM):
+        figure = model.plot_eta_trace()
+        if figure is not None:
+            figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/eta.png", dpi=100)
+            plt.close(figure[0])
+    ## Alpha, Gamma, and Phi Traces
+    for epoch in tqdm(trace_epochs, desc="Alpha, Gamma, and Phi Trace Plots", file=sys.stdout):
         epoch_name = epoch if epoch is not None else "all"
-        if "alpha" not in trace_params and "phi" not in trace_params:
+        if not any(i in trace_params for i in ["alpha","gamma","phi","eta"]):
             continue
         if "alpha" in trace_params:
-            figure = model.plot_alpha_trace(epoch=epoch,
-                                            top_k_topics=n_plot_topics)
+            if not isinstance(model, IDTM):
+                figure = model.plot_alpha_trace(epoch=epoch,
+                                                top_k_topics=n_plot_topics)
+                if figure is not None:
+                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
+                    plt.close(figure[0])
+            else:
+                figure = model.plot_alpha_trace(epochs=[epoch])
+                if figure is not None:
+                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
+                    plt.close(figure[0])
+        if "gamma" in trace_params and isinstance(model, IDTM):
+            figure = model.plot_gamma_trace(epochs=[epoch])
             if figure is not None:
-                figure[0].savefig(f"{OUTPUT_DIR}plots/trace/alpha_{epoch_name}.png", dpi=100)
+                figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/gamma_{epoch_name}.png", dpi=100)
                 plt.close(figure[0])
         if "phi" in trace_params:
             for kdim in range(n_dims):
@@ -440,7 +492,7 @@ def plot_traces(model,
                                                 epoch=epoch,
                                                 top_k_terms=n_plot_terms)
                 if figure is not None:
-                    figure[0].savefig(f"{OUTPUT_DIR}plots/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
+                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
                     plt.close(figure[0])
 
 def plot_topic_evolution(model):
@@ -448,10 +500,12 @@ def plot_topic_evolution(model):
 
     """
     ## Number of Terms to Plot
-    n_plot_terms = min(MAX_PLOT_TERMS, len(model.vocabulary))
+    if isinstance(model, IDTM):
+        n_plot_terms =  min(MAX_PLOT_TERMS, model.V)
+    elif isinstance(model, DTM):
+        n_plot_terms = min(MAX_PLOT_TERMS, len(model.vocabulary))
     ## Get Epochs and Params
-    is_dynamic = isinstance(model, DTM) or isinstance(model, IDTM)
-    n_dims = model.phi.shape[1] if is_dynamic else model.phi.shape[0]
+    n_dims = model.phi.shape[1]
     topic_dims = range(n_dims)
     ## Directory
     _ = make_directory(f"{OUTPUT_DIR}plots/topic_evolution/", remove_existing=True)
@@ -509,22 +563,27 @@ def main():
     time_bins = time_bins[tb_min:tb_max+1]
     time_bins_dt = time_bins_dt[tb_min:tb_max+1]
     ## Initialize Model and Parameters
-    dynamic_model = MODEL_TYPE in set(["dtm","idtm"])
     MODEL_PARAMS["vocabulary"] = vocabulary
     if MODEL_TYPE in set(["dtm","idtm"]):
         MODEL_PARAMS["t"] = max(timestamps_assigned) + 1
     model = MODELS.get(MODEL_TYPE)(**MODEL_PARAMS)
     ## Fit Model
     fit_kwargs = {}
-    if dynamic_model:
+    if isinstance(model, DTM):
         fit_kwargs.update({"labels":timestamps_assigned,"labels_key":"timepoint"})
-    model = model.fit(X, **fit_kwargs)
+    elif isinstance(model, IDTM):
+        fit_kwargs.update({"timepoints":timestamps_assigned})
+    model = model.fit(X,
+                      checkpoint_location=f"{OUTPUT_DIR}",
+                      checkpoint_frequency=CHECKPOINT_FREQUENCY,
+                      **fit_kwargs)
     ## Save Model
-    _ = model.save(f"{OUTPUT_DIR}topic_model.joblib")
+    _ = model.save(f"{OUTPUT_DIR}model.joblib")
     ## Save Model Summary
-    _ = model.summary(topic_word_top_n=15, file=open(f"{OUTPUT_DIR}topic_model.summary.txt","w"))
+    if not isinstance(model, IDTM):
+        _ = model.summary(topic_word_top_n=15, file=open(f"{OUTPUT_DIR}topic_model.summary.txt","w"))
     ## Trace Plots
-    _ = plot_traces(model, RANDOM_SEED)
+    _ = plot_traces(model, MODEL_TYPE, RANDOM_SEED)
     ## Topic Evolution
     if dynamic_model:
         ## Plots
