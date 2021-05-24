@@ -7,9 +7,6 @@ Real Data Modeling
 ### Configuration
 #####################
 
-## Experiment Output Directory
-OUTPUT_DIR = "./data/results/observed/idtm/"
-
 ## Data
 DATA_DIR = "./data/processed/depression/"
 DATA_TYPE = "comments"
@@ -20,51 +17,32 @@ MAX_DATE = "2021-04-01"
 MIN_VOCAB_DF = 50
 MIN_VOCAB_CF = 100
 MIN_WORDS_PER_DOCUMENT = 25
+MAX_VOCAB_SIZE = 1000
 
 ## Topic Model Parameters
-MODEL_TYPE = "idtm"
+MODEL_TYPE = "hdp"
 MODEL_PARAMS = {
 
-    # "k":50,
-    # "rm_top":100,
+    "initial_k":50,
+    "rm_top":100,
 
-    # "alpha":0.1,
-    # "eta":0.1,
+    "alpha":0.1,
+    "eta":0.1,
 
     # "alpha_var":0.001,
     # "eta_var":0.001,
     # "phi_var":0.001,
 
-    "initial_k":10,
-    "initial_m":3,
-    "alpha_0_a":1,
-    "alpha_0_b":1,
-    "gamma_0_a":1,
-    "gamma_0_b":1,
-    "sigma_0":100,
-    "rho_0":10,
-    "delta":8,
-    "lambda_0":10,
-    "q":5,
-    "q_dim":3,
-    "q_var":10,
-    "alpha_filter":None,
-    "gamma_filter":None,
-    "n_filter":0,
-    "threshold":None,
-    "k_filter_frequency":None,
-    "batch_size":1000,
-
     "cache_rate":10,
-    "cache_params":set(["alpha","gamma","phi","theta","eta","acceptance"]),
+    "cache_params":set(["alpha","phi","theta"]),
             
-    "n_iter":1,
+    "n_iter":10,
     "n_burn":1,
     "jobs":8,
     "verbose":True,
     "seed":42,
 }
-CHECKPOINT_FREQUENCY = 10
+CHECKPOINT_FREQUENCY = 100
 
 ## Aggregation into Epochs
 AGG_RATE = "3MO"
@@ -101,6 +79,9 @@ from smtm.util.helpers import make_directory, chunks
 #####################
 ### Globals
 #####################
+
+## Experiment Output Directory
+OUTPUT_DIR = f"./data/results/observed/{MODEL_TYPE}/"
 
 ## Model Classes
 MODELS = {
@@ -254,6 +235,10 @@ def filter_vocabulary(X, vocabulary):
     mask = sorted(set(mask) & set(min_len_mask))
     X = X[:,mask]
     vocabulary = [vocabulary[v] for v in mask]
+    if MAX_VOCAB_SIZE is not None:
+        max_size_mask = sorted(X.sum(axis=0).A[0].argsort()[-MAX_VOCAB_SIZE:])
+        X = X[:,max_size_mask]
+        vocabulary = [vocabulary[i] for i in max_size_mask]
     return X, vocabulary
 
 def filter_documents(X,
@@ -433,6 +418,7 @@ def plot_traces(model,
         n_plot_terms = len(model.model.used_vocabs)
     else:
         n_plot_terms = model.V
+    n_plot_terms = min(MAX_PLOT_TERMS, n_plot_terms)
     n_dims = model.phi.shape[1] if is_dynamic else model.phi.shape[0]
     ## Get Epochs and Params
     trace_epochs = [None] if not is_dynamic else range(model.phi.shape[0])
@@ -568,6 +554,7 @@ def main():
         MODEL_PARAMS["t"] = max(timestamps_assigned) + 1
     model = MODELS.get(MODEL_TYPE)(**MODEL_PARAMS)
     ## Fit Model
+    print("Training Model")
     fit_kwargs = {}
     if isinstance(model, DTM):
         fit_kwargs.update({"labels":timestamps_assigned,"labels_key":"timepoint"})
@@ -585,7 +572,7 @@ def main():
     ## Trace Plots
     _ = plot_traces(model, MODEL_TYPE, RANDOM_SEED)
     ## Topic Evolution
-    if dynamic_model:
+    if isinstance(model, DTM) or isinstance(model, IDTM):
         ## Plots
         _ = plot_topic_evolution(model)
         ## Summarization
