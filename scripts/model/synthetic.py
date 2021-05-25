@@ -426,27 +426,29 @@ def main():
     if sys.argv[1] == "idtm":
         print("Fitting iDTM Model")
         model = IDTM(vocabulary=data["data"]["vocabulary"],
-                     initial_k=6,
-                     initial_m=3,
-                     alpha_0_a=.1,
-                     alpha_0_b=10,
-                     gamma_0_a=.1,
-                     gamma_0_b=10,
-                     sigma_0=100,
-                     rho_0=10,
+                     initial_k=1,
+                     initial_m=10,
+                     alpha_0_a=1,
+                     alpha_0_b=1,
+                     gamma_0_a=1,
+                     gamma_0_b=1,
+                     sigma_0=1e-2,
+                     rho_0=1e-2,
                      delta=8,
                      lambda_0=10,
                      q=5,
                      t=n_timepoints,
                      q_dim=3,
-                     q_var=10,
-                     alpha_filter=1,
-                     gamma_filter=1,
-                     n_filter=0,
+                     q_var=1e-4,
+                     q_weight=0.5,
+                     q_type="hmm",
+                     alpha_filter=4,
+                     gamma_filter=10,
+                     n_filter=1,
                      threshold=None,
                      k_filter_frequency=None,
-                     batch_size=100,
-                     n_iter=5,
+                     batch_size=250,
+                     n_iter=1,
                      n_burn=1,
                      cache_rate=1,
                      cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
@@ -484,8 +486,6 @@ def main():
     plt.tight_layout()
     plt.savefig(f"{OUTPUT_DIR}{model_type}/topic_recovery.png", dpi=100)
     plt.close()
-
-    
 
 ###################
 ### Execute

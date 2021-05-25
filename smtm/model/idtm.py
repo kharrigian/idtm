@@ -40,6 +40,46 @@ from ..util.helpers import chunks, make_directory
 ### Class
 #######################
 
+class GaussianProposal(object):
+
+    def __init__(self,
+                 q_var=1,
+                 q_weight=0.5):
+        """
+
+        """
+        self.q_var = q_var
+        self.q_weight = q_weight
+        self.q = []
+    
+    def generate(self,
+                 phi):
+        """
+
+        """
+        ## Reset Proposal Params
+        self.q = []
+        ## Convolve Sampled and Current Previous Values
+        phi_star = np.zeros_like(phi)
+        phi_star[0] = stats.multivariate_normal(phi[0], self.q_var).rvs()
+        self.q.append((phi[0], self.q_var))
+        for t in range(1, phi.shape[0]):
+            q_mu = self.q_weight * phi_star[t-1] + (1 - self.q_weight) * phi[t-1]
+            self.q.append((q_mu, self.q_var))
+            phi_star[t] = stats.multivariate_normal(q_mu, self.q_var).rvs()
+        return phi_star
+
+    def score(self,
+              phi):
+        """
+
+        """
+        assert phi.shape[0] == len(self.q)
+        ll = 0
+        for p, q in zip(phi, self.q):
+            ll += stats.multivariate_normal(q[0], q[1]).logpdf(p)
+        return ll
+
 class IDTM(TopicModel):
 
     """
@@ -47,35 +87,37 @@ class IDTM(TopicModel):
     """
 
     def __init__(self,
-                 initial_k=1,
-                 initial_m=3,
-                 alpha_0_a=1,
-                 alpha_0_b=1,
-                 gamma_0_a=1,
-                 gamma_0_b=1,
-                 sigma_0=10,
-                 rho_0=0.01,
-                 delta=4,
-                 lambda_0=0.5,
-                 q=5,
-                 t=1,
-                 q_dim=1,
-                 q_var=1,
-                 alpha_filter=1,
-                 gamma_filter=1,
-                 n_filter=10,
-                 threshold=0.01,
-                 k_filter_frequency=None,
-                 batch_size=None,
-                 binarize=False,
-                 vocabulary=None,
-                 n_iter=100,
-                 n_burn=25,
-                 cache_rate=None,
-                 cache_params=set(),
-                 jobs=1,
-                 seed=42,
-                 verbose=False):
+                 initial_k=1, ## Initial number of components available
+                 initial_m=3, ## Initial number of tables available per restaurant
+                 alpha_0_a=1, ## New table concentration prior
+                 alpha_0_b=1, ## New table concentration prior
+                 gamma_0_a=1, ## New component concentration prior
+                 gamma_0_b=1, ## New component concentration prior
+                 sigma_0=10, ## Base variance
+                 rho_0=0.01, ## Transition variance
+                 delta=4, ## Moving window
+                 lambda_0=0.5, ## Decay rate
+                 q=5, ## Number of auxiliary samples
+                 t=1, ## Time periods
+                 q_dim=1, ## HMM number of states
+                 q_var=1, ## HMM variance prior
+                 q_weight=0.5, ## Gaussian Proposal Weights
+                 q_type="hmm",
+                 alpha_filter=1, ## Fixed alpha during filtering
+                 gamma_filter=1, ## Fixed gamma during filtering
+                 n_filter=10, ## Number of filtering iterations
+                 threshold=0.01, ## Minimum threshold for topic acceptance
+                 k_filter_frequency=None, ## Frequency to filtering topics based on threshold
+                 batch_size=None, ## Batch size
+                 binarize=False, ## Whether to binarize the document term matrix
+                 vocabulary=None, ## Vocabulary
+                 n_iter=100, ## Number of training iterations
+                 n_burn=25, ## Burn in
+                 cache_rate=None, ## How often to cache
+                 cache_params=set(), ## Which params to cache
+                 jobs=1, ## Number of multiprocessing jobs
+                 seed=42, ## Random Seed
+                 verbose=False): ## Verbosity
         """
 
         """
@@ -98,6 +140,8 @@ class IDTM(TopicModel):
         ## Proposal Params
         self._q_dim = q_dim
         self._q_var = q_var
+        self._q_type = q_type
+        self._q_weight = q_weight
         ## Training Params
         self._alpha_filter = alpha_filter
         self._gamma_filter = gamma_filter
@@ -165,10 +209,13 @@ class IDTM(TopicModel):
         if not isinstance(a, np.ndarray):
             a = np.array(a)
         asum = a.sum(**kwargs)
-        a_norm = np.divide(a,
-                           asum,
-                           out=np.zeros_like(a),
-                           where=asum>0)
+        if isinstance(asum, np.ndarray):
+            a_norm = np.divide(a,
+                               asum,
+                               out=np.zeros_like(a),
+                               where=asum>0)
+        else:
+            a_norm = a / asum if asum != 0 else 0
         return a_norm
 
     def _initialize_bookkeeping(self,
@@ -183,14 +230,14 @@ class IDTM(TopicModel):
         ## Initialize Random Table Assignments For Each Word [n x w_n]
         self.word2table = [list(np.random.choice(self._initial_m, size=len(x))) for x in X]
         ## Initialize Random Dish Assignments for Each Table [n x m_n]
-        self.table2dish = [[np.random.randint(self._initial_k) for _ in range(self._initial_m)] for _ in X]
+        self.table2dish = [list(np.random.randint(self._initial_k, size=self._initial_m)) for _ in X]
         ## Epoch Associated with Each Document
         self.rest2epoch = [[] for t in range(self._t)]
         for i, t in enumerate(timepoints):
             self.rest2epoch[t].append(i)
         ## Space for Sampling
-        initial_kmax = self._initial_k + self._initial_k // 4
-        initial_mmax = max(max(list(map(len,X))) // 2, self._initial_m)
+        initial_kmax = max(self._initial_k + self._initial_k // 4, 2)
+        initial_mmax = max(max(max(list(map(len,X))) // 2, self._initial_m), 2)
         ## Table and Component Counts (m: [t x k_max], n: [n x m_max])
         print("Initializing Counts")
         self.m = np.zeros((self._t, initial_kmax), dtype=np.int)
@@ -198,8 +245,10 @@ class IDTM(TopicModel):
         self.n = np.zeros((len(X), initial_mmax), dtype=np.int)
         for epoch, documents in enumerate(self.rest2epoch):
             for d in documents:
-                for dish_k in self.table2dish[d]:
-                    self.m[epoch][dish_k] += 1
+                dtables = set(self.word2table[d])
+                for j, dish_k in enumerate(self.table2dish[d]):
+                    if j in dtables:
+                        self.m[epoch][dish_k] += 1
                 for table_k in self.word2table[d]:
                     self.n[d][table_k] += 1
         ## Component Lifespans
@@ -394,6 +443,7 @@ class IDTM(TopicModel):
         self.phi = self.phi[:,nonempty_components,:]
         self.phi_T = self.phi_T[:,nonempty_components,:]
         self.Z = self.Z[:,nonempty_components,:]
+        self.K_life = self.K_life[nonempty_components]
         ## Cycle Through Epochs
         for epoch, documents in enumerate(self.rest2epoch):
             ## Cycle through documents in the epoch
@@ -426,7 +476,7 @@ class IDTM(TopicModel):
         batch = set(batch)
         ## Check for Component Filtering
         k_filter_on = False
-        if (self._k_filter_freq is not None and iteration % self._k_filter_freq == 0) or is_last:
+        if (self._k_filter_freq is not None and iteration % self._k_filter_freq == 0) or (is_last and self._k_filter_freq is not None):
             mdist = self.m.sum(axis=0) / self.m.sum()
             k_filter = (mdist >= self._threshold).astype(int)
             k_filter_on = True
@@ -445,7 +495,7 @@ class IDTM(TopicModel):
                 self.m_kt_prime[epoch] = (self.m_kt_prime[epoch-1] + self.m[epoch-1]) * np.exp(-1 / self._lambda_0)
             elif (epoch + 1) >= self._delta:
                 self.m_kt_prime[epoch] = (self.m_kt_prime[epoch-1] + self.m[epoch-1]) * np.exp(-1 / self._lambda_0) - \
-                                        self.m[epoch-(self._delta+1)] * np.exp(-(self._delta + 1) / self._lambda_0)
+                                          self.m[epoch-(self._delta+1)] * np.exp(-(self._delta + 1) / self._lambda_0)
             ## Cycle Through Documents
             for document in list(filter(lambda d: d in batch, epoch_docs)):
                 for table, dish in enumerate(self.table2dish[document]):
@@ -465,7 +515,7 @@ class IDTM(TopicModel):
                     if epoch > 0:
                         f_v_tdb_exists = np.array([self._multinomial_pmf(v_tdk, n_tdb, p, False) for p in self.phi_T[epoch-1]])
                     else:
-                        f_v_tdb_exists = np.zeros_like(f_v_tdb_used)
+                        f_v_tdb_exists = np.ones_like(f_v_tdb_used) / len(f_v_tdb_used)
                     f_v_tdb_new = np.array([self._multinomial_pmf(v_tdk, n_tdb, p, False) for p in self._phi_aux_T])
                     ## Probabilities
                     p_k_used = (self.m[epoch] + self.m_kt_prime[epoch]) * f_v_tdb_used
@@ -473,6 +523,7 @@ class IDTM(TopicModel):
                     p_k_not_new = np.where([i in k_used for i in range(p_k_used.shape[0])],
                                             p_k_used,
                                             p_k_exist)
+                    p_k_not_new[max_k:] = 0
                     p_k_new = self.gamma[epoch] / self._q * f_v_tdb_new
                     ## Component Filtering (Only Allocate to Existing)
                     if k_filter_on:
@@ -480,8 +531,6 @@ class IDTM(TopicModel):
                         p_k_new = p_k_new * 0
                     ## Merge Distribution and Normalize
                     p_k_all = np.hstack([p_k_not_new, p_k_new])
-                    if p_k_all.sum() == 0:
-                        continue
                     p_k_all = p_k_all / p_k_all.sum()
                     ## TODO: Figure out transition probability term for reweighting K_potential
                     ## Sample Topic
@@ -574,18 +623,17 @@ class IDTM(TopicModel):
                         if epoch > 0:
                             p_k_exists = self.m_kt_prime[epoch] * self.phi_T[epoch-1,:,x_tdi]
                         else:
-                            p_k_exists = np.zeros_like(p_k_used)
+                            p_k_exists = np.ones_like(p_k_used) / len(p_k_used)
                         p_k_not_new = np.where([i in k_used for i in range(p_k_used.shape[0])],
                                                 p_k_used,
                                                 p_k_exists)
+                        p_k_not_new[max_k:] = 0
                         p_k_new = self.gamma[epoch] / self._q * self._phi_aux_T[:,x_tdi]
                         if k_filter_on:
                             p_k_not_new = p_k_not_new * k_filter
                             p_k_new = p_k_new * 0
                         ## Construct Sample Probability
                         p_k_all = np.hstack([p_k_not_new, p_k_new])
-                        if p_k_all.sum() == 0:
-                            continue
                         p_k_all = p_k_all / p_k_all.sum()
                         ## Sample Component
                         k_sampled = sample_categorical(p_k_all)
@@ -681,27 +729,31 @@ class IDTM(TopicModel):
             phi_k = phi_k[born:die+1]
             v_k = v_k[born:die+1]
             ## Generate Proposal Distribution and Sample from It
-            if phi_k.shape[0] == 1:
+            if phi_k.shape[0] == 1: ## Case 1: Only One Epoch
                 qfunc = None
-                phi_k_star = stats.multivariate_normal(phi_k[0], self._sigma_0).rvs()
+                phi_k_star = stats.multivariate_normal(phi_k[0], self._q_var).rvs()
             else:
-                try:
-                    nn_phi = len(phi_k.sum(axis=1).nonzero()[0])
-                    q = GaussianHMM(n_components=max(min(self._q_dim, nn_phi // 3), 1),
-                                    covariance_type="diag",
-                                    n_iter=10,
-                                    means_prior=0,
-                                    covars_prior=self._q_var,
-                                    random_state=self._seed,
-                                    verbose=False)
-                    q = q.fit(phi_k)
-                    phi_k_star, _ = q.sample(phi_k.shape[0])
+                if self._q_type == "hmm":
+                    try:
+                        nn_phi = len(phi_k.sum(axis=1).nonzero()[0])
+                        q = GaussianHMM(n_components=max(min(self._q_dim, nn_phi // 3), 1),
+                                        covariance_type="diag",
+                                        n_iter=10,
+                                        means_prior=0,
+                                        covars_prior=self._q_var,
+                                        random_state=self._seed,
+                                        verbose=False)
+                        q = q.fit(phi_k)
+                        phi_k_star, _ = q.sample(phi_k.shape[0])
+                        qfunc = q.score
+                    except:
+                        q = GaussianProposal(self._q_var, self._q_weight)
+                        phi_k_star = q.generate(phi_k)
+                        qfunc = q.score
+                elif self._q_type == "gaussian":
+                    q = GaussianProposal(self._q_var, self._q_weight)
+                    phi_k_star = q.generate(phi_k)
                     qfunc = q.score
-                except:
-                    phi_k_star = np.zeros_like(phi_k)
-                    for e, epoch_component in enumerate(phi_k):
-                        phi_k_star[e] = stats.multivariate_normal(epoch_component, self._sigma_0).rvs()
-                    qfunc = lambda x: 0
             ## MH Step
             phi_k, accept = self._metropolis_hastings(phi_k,
                                                       phi_k_star,
@@ -1129,7 +1181,7 @@ class IDTM(TopicModel):
             data = logistic_transform(data, axis=1, keepdims=True)
         terms = self.vocabulary if self.vocabulary is not None else list(range(data.shape[1]))
         if top_k_terms is not None:
-            top_k_i = top_k_type(data, axis=0).argsort()[-top_k_terms:]
+            top_k_i = sorted(top_k_type(data, axis=0).argsort()[-top_k_terms:])
             data = data[:,top_k_i]
             terms = [terms[i] for i in top_k_i]
         ## Plot Evolution
