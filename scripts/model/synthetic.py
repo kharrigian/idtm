@@ -426,7 +426,7 @@ def main():
     if sys.argv[1] == "idtm":
         print("Fitting iDTM Model")
         model = IDTM(vocabulary=data["data"]["vocabulary"],
-                     initial_k=1,
+                     initial_k=5,
                      initial_m=10,
                      alpha_0_a=1,
                      alpha_0_b=1,

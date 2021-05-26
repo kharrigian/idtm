@@ -260,18 +260,6 @@ class IDTM(TopicModel):
         ## Initialize Base Distribution
         print("Initializing Components")
         self._H = stats.multivariate_normal(np.zeros(self.V), self._sigma_0)
-        ## Initialize Components [t x k_max x V]
-        # self.phi = np.zeros((self._t, initial_kmax, self.V))
-        # self.phi[0] = self._H.rvs(initial_kmax)
-        # if initial_kmax == 1:
-        #     self.phi[0] = self.phi[0].reshape(1,-1)
-        # for epoch in tqdm(range(1, self._t), position=0, leave=True, desc="Epoch", total=self._t-1):
-        #     self.phi[epoch] = np.zeros(self.phi[0].shape)
-        #     for k, comp in tqdm(enumerate(self.phi[epoch-1]), desc="Dimension", position=1, leave=False, total=self.phi[epoch-1].shape[0]):
-        #         self.phi[epoch][k] = stats.multivariate_normal(comp, self._rho_0).rvs()
-        # self.phi = np.stack(self.phi)
-        # ## Transform Components
-        # self.phi_T = logistic_transform(self.phi, axis=2, keepdims=True)
         ## Initialize Word Counts 
         ## Z: [t x k_max x V] frequency of each word for each k for each t
         ## v: [n x m_max x V]: frequency of each word in each table for each document
@@ -283,7 +271,7 @@ class IDTM(TopicModel):
                     k_d = self.table2dish[d][t_d]
                     self.Z[epoch,k_d,w_d] += 1
                     self.v[d, t_d, w_d] += 1
-        ## Initialize Parameters
+        ## Initialize Components [t x k_max x V]
         self.phi = np.zeros(self.Z.shape)
         for e, Ze in enumerate(self.Z):
             self.phi[e] = np.divide((Ze - Ze.mean(axis=1,keepdims=True)).astype(float),
@@ -343,11 +331,11 @@ class IDTM(TopicModel):
         Multinomial probability mass function.
         Parameters
         ----------
-        x : array_like
+        x : array_like (d,)
             Quantiles.
         n : int
             Number of trials
-        p : array_like, shape (k,)
+        p : array_like, shape (k,d)
             Probabilities. These should sum to one. If they do not, then
             ``p[-1]`` is modified to account for the remaining probability so
             that ``sum(p) == 1``.
@@ -357,14 +345,12 @@ class IDTM(TopicModel):
             Log of the probability mass function evaluated at `x`. 
         """
         x = np.asarray(x)
-        if p.shape[0] != x.shape[-1]:
-            raise ValueError("x & p shapes do not match.")
         coef = gammaln(n + 1) - gammaln(x + 1.).sum(axis=-1)
         val = coef + np.sum(xlogy(x, p), axis=-1)
         # insist on that the support is a set of *integers*
         mask = np.logical_and.reduce(np.mod(x, 1) == 0, axis=-1)
         mask &= (x.sum(axis=-1) == n)
-        out = np.where(mask, val, -np.inf)
+        out = np.where([mask] * p.shape[0], val, -np.inf)
         if not log:
             out = np.exp(out)
         return out
@@ -417,10 +403,10 @@ class IDTM(TopicModel):
             if t == 0:
                 continue
             ## Proposal Data Likelihood
-            emission_star_ll.append(self._multinomial_pmf(v_kt, n_kt, phi_k_star_smooth[t],log=True))
+            emission_star_ll.append(self._multinomial_pmf(v_kt, n_kt, phi_k_star_smooth[[t]],log=True)[0])
             transition_star_ll.append(stats.multivariate_normal(phi_k_star[t-1],self._rho_0).logpdf(phi_k_star[t]))
             ## Existing Data Likelihood
-            emission_star_ll.append(self._multinomial_pmf(v_kt, n_kt, phi_k_smooth[t],log=True))
+            emission_star_ll.append(self._multinomial_pmf(v_kt, n_kt, phi_k_smooth[[t]],log=True)[0])
             transition_ll.append(stats.multivariate_normal(phi_k[t-1],self._rho_0).logpdf(phi_k[t]))
         ## Compute Ratio
         if v_k.shape[0] > 1:
@@ -519,12 +505,12 @@ class IDTM(TopicModel):
                     max_k = max(k_used | k_exists)
                     ## Get Conditional Probability of Data Given Table Component
                     v_tdk = self.v[document][table]
-                    f_v_tdb_used = np.array([self._multinomial_pmf(v_tdk, n_tdb, p, False) for p in self.phi_T[epoch]])
+                    f_v_tdb_used = self._multinomial_pmf(v_tdk, n_tdb, self.phi_T[epoch], False)
                     if epoch > 0:
-                        f_v_tdb_exists = np.array([self._multinomial_pmf(v_tdk, n_tdb, p, False) for p in self.phi_T[epoch-1]])
+                        f_v_tdb_exists = self._multinomial_pmf(v_tdk, n_tdb, self.phi_T[epoch-1], False)
                     else:
                         f_v_tdb_exists = np.ones_like(f_v_tdb_used) / len(f_v_tdb_used)
-                    f_v_tdb_new = np.array([self._multinomial_pmf(v_tdk, n_tdb, p, False) for p in self._phi_aux_T])
+                    f_v_tdb_new = self._multinomial_pmf(v_tdk, n_tdb, self._phi_aux_T, False)
                     ## Probabilities
                     p_k_used = (self.m[epoch] + self.m_kt_prime[epoch]) * f_v_tdb_used
                     p_k_exist = self.m_kt_prime[epoch] * f_v_tdb_exists
