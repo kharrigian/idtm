@@ -261,21 +261,21 @@ class IDTM(TopicModel):
         print("Initializing Components")
         self._H = stats.multivariate_normal(np.zeros(self.V), self._sigma_0)
         ## Initialize Components [t x k_max x V]
-        self.phi = np.zeros((self._t, initial_kmax, self.V))
-        self.phi[0] = self._H.rvs(initial_kmax)
-        if initial_kmax == 1:
-            self.phi[0] = self.phi[0].reshape(1,-1)
-        for epoch in tqdm(range(1, self._t), position=0, leave=True, desc="Epoch", total=self._t-1):
-            self.phi[epoch] = np.zeros(self.phi[0].shape)
-            for k, comp in tqdm(enumerate(self.phi[epoch-1]), desc="Dimension", position=1, leave=False, total=self.phi[epoch-1].shape[0]):
-                self.phi[epoch][k] = stats.multivariate_normal(comp, self._rho_0).rvs()
-        self.phi = np.stack(self.phi)
-        ## Transform Components
-        self.phi_T = logistic_transform(self.phi, axis=2, keepdims=True)
+        # self.phi = np.zeros((self._t, initial_kmax, self.V))
+        # self.phi[0] = self._H.rvs(initial_kmax)
+        # if initial_kmax == 1:
+        #     self.phi[0] = self.phi[0].reshape(1,-1)
+        # for epoch in tqdm(range(1, self._t), position=0, leave=True, desc="Epoch", total=self._t-1):
+        #     self.phi[epoch] = np.zeros(self.phi[0].shape)
+        #     for k, comp in tqdm(enumerate(self.phi[epoch-1]), desc="Dimension", position=1, leave=False, total=self.phi[epoch-1].shape[0]):
+        #         self.phi[epoch][k] = stats.multivariate_normal(comp, self._rho_0).rvs()
+        # self.phi = np.stack(self.phi)
+        # ## Transform Components
+        # self.phi_T = logistic_transform(self.phi, axis=2, keepdims=True)
         ## Initialize Word Counts 
         ## Z: [t x k_max x V] frequency of each word for each k for each t
         ## v: [n x m_max x V]: frequency of each word in each table for each document
-        self.Z = np.zeros_like(self.phi, dtype=np.int)
+        self.Z = np.zeros((self._t, initial_kmax, self.V), dtype=np.int)
         self.v = np.zeros((len(X), initial_mmax, self.V), dtype=np.int)
         for epoch, documents in enumerate(self.rest2epoch):
             for d in documents:
@@ -283,6 +283,14 @@ class IDTM(TopicModel):
                     k_d = self.table2dish[d][t_d]
                     self.Z[epoch,k_d,w_d] += 1
                     self.v[d, t_d, w_d] += 1
+        ## Initialize Parameters
+        self.phi = np.zeros(self.Z.shape)
+        for e, Ze in enumerate(self.Z):
+            self.phi[e] = np.divide((Ze - Ze.mean(axis=1,keepdims=True)).astype(float),
+                                    Ze.std(axis=1,keepdims=True).astype(float),
+                                    where=Ze.std(axis=1,keepdims=True)>0,
+                                    out=np.zeros_like(Ze).astype(float))
+        self.phi_T = logistic_transform(self.phi, axis=2, keepdims=True)
         ## Initialize Concetration Parameters
         if self._n_filter > 0:
             self.gamma = self._gamma_filter * np.ones(self._t)
@@ -555,8 +563,8 @@ class IDTM(TopicModel):
                         k_new_ind = max_k + 1
                         k_ind_created.add(k_new_ind)
                         ## Check To See if Expansion Need
-                        if k_new_ind >= self.m.shape[1]:
-                            exp_size = self.m.shape[1] // 2
+                        if k_new_ind >= (self.m.shape[1] - 1):
+                            exp_size = max(self.m.shape[1] // 2, 2)
                             self.m = np.hstack([self.m, np.zeros((self.m.shape[0], exp_size), dtype=np.int)])
                             self.m_kt_prime = np.hstack([self.m_kt_prime, np.zeros((self.m_kt_prime.shape[0], exp_size), dtype=np.int)])
                             self.Z = np.hstack([self.Z, np.zeros((self.Z.shape[0], exp_size, self.Z.shape[2]), dtype=np.int)])
@@ -615,7 +623,7 @@ class IDTM(TopicModel):
                         max_k = max(k_used | k_exists)
                         ## Check Cache Size (See if Enough Tables)
                         if b_0 >= self.n.shape[1]:
-                            exp_size = self.n.shape[1] // 4
+                            exp_size = max(self.n.shape[1] // 4, 2)
                             self.n = np.hstack([self.n, np.zeros((self.n.shape[0],exp_size), dtype=np.int)])
                             self.v = np.hstack([self.v, np.zeros((self.v.shape[0],exp_size,self.v.shape[2]),dtype=np.int)])
                         ## Probability of Word For a New Table under Each Component
@@ -659,8 +667,8 @@ class IDTM(TopicModel):
                             k_new_ind = max_k + 1
                             k_ind_created.add(k_new_ind)
                             ## Check Cache Size (Components)
-                            if k_new_ind >= self.m.shape[1]:
-                                exp_size = self.m.shape[1] // 2
+                            if k_new_ind >= self.m.shape[1] - 1:
+                                exp_size = max(self.m.shape[1] // 2, 2)
                                 self.m = np.hstack([self.m, np.zeros((self.m.shape[0], exp_size), dtype=np.int)])
                                 self.m_kt_prime = np.hstack([self.m_kt_prime, np.zeros((self.m_kt_prime.shape[0], exp_size), dtype=np.int)])
                                 self.Z = np.hstack([self.Z, np.zeros((self.Z.shape[0], exp_size, self.Z.shape[2]), dtype=np.int)])

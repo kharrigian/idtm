@@ -444,11 +444,11 @@ def main():
                      q_type="hmm",
                      alpha_filter=4,
                      gamma_filter=10,
-                     n_filter=1,
+                     n_filter=5,
                      threshold=None,
                      k_filter_frequency=None,
-                     batch_size=250,
-                     n_iter=1,
+                     batch_size=500,
+                     n_iter=100,
                      n_burn=1,
                      cache_rate=1,
                      cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
@@ -458,7 +458,7 @@ def main():
         model = model.fit(data["data"]["X"],
                           data["data"]["t"],
                           checkpoint_location=model_checkpoint_directory,
-                          checkpoint_frequency=100)
+                          checkpoint_frequency=10)
         model_infer = model.theta
     ## Save Models and Trace Plots
     if model is None:
