@@ -88,12 +88,11 @@ class IDTM(TopicModel):
 
     def __init__(self,
                  initial_k=1, ## Initial number of components available
-                 initial_m=3, ## Initial number of tables available per restaurant
                  alpha_0_a=1, ## New table concentration prior
                  alpha_0_b=1, ## New table concentration prior
                  gamma_0_a=1, ## New component concentration prior
                  gamma_0_b=1, ## New component concentration prior
-                 sigma_0=10, ## Base variance
+                 sigma_0=1, ## Base variance
                  rho_0=0.01, ## Transition variance
                  delta=4, ## Moving window
                  lambda_0=0.5, ## Decay rate
@@ -131,7 +130,6 @@ class IDTM(TopicModel):
                          verbose=verbose)
         ## Initialization Parameters
         self._initial_k = initial_k
-        self._initial_m = initial_m
         ## Priors
         self._alpha_0 = (alpha_0_a, alpha_0_b)
         self._gamma_0 = (gamma_0_a, gamma_0_b)
@@ -227,22 +225,37 @@ class IDTM(TopicModel):
         print("Initializing Bookkeeping...")
         ## Vocabulary Size
         self.V = len(self.vocabulary)
-        ## Initialize Random Table Assignments For Each Word [n x w_n]
-        self.word2table = [list(np.random.choice(self._initial_m, size=len(x))) for x in X]
-        ## Initialize Random Dish Assignments for Each Table [n x m_n]
-        self.table2dish = [list(np.random.randint(self._initial_k, size=self._initial_m)) for _ in X]
+        ## Initialize Components
+        print("Initializing Components")
+        self._H = stats.multivariate_normal(np.zeros(self.V), self._sigma_0)
+        self.phi = np.zeros((self._t, self._initial_k, self.V))
+        self.phi[0] = self._H.rvs(self._initial_k)
+        for epoch in tqdm(range(1,self._t), total=self._t-1, file=sys.stdout):
+            for k in range(self._initial_k):
+                self.phi[epoch,k] = stats.multivariate_normal(self.phi[epoch-1,k], self._rho_0).rvs()
+        ## Transform Components
+        self.phi_T = logistic_transform(self.phi, axis=2, keepdims=True)
         ## Epoch Associated with Each Document
         self.rest2epoch = [[] for t in range(self._t)]
         for i, t in enumerate(timepoints):
             self.rest2epoch[t].append(i)
-        ## Space for Sampling
-        initial_kmax = max(self._initial_k + self._initial_k // 4, 2)
-        initial_mmax = max(max(max(list(map(len,X))) // 2, self._initial_m), 2)
+        ## Initialize Word and Table Assignments
+        print("Initializing Word Assignments")
+        ## Initialize Dish Assignments
+        self.table2dish = [list(range(self._initial_k)) for x in X]
+        ## Sample Word Assignments
+        self.word2table = []
+        for x, t in zip(X, timepoints):
+            b_td = []
+            for i in x:
+                b_tdi = np.random.choice(self._initial_k, p=self.phi_T[t, :, i] / self.phi_T[t, :, i].sum())
+                b_td.append(b_tdi)
+            self.word2table.append(b_td)
         ## Table and Component Counts (m: [t x k_max], n: [n x m_max])
         print("Initializing Counts")
-        self.m = np.zeros((self._t, initial_kmax), dtype=np.int)
+        self.m = np.zeros((self._t, self._initial_k), dtype=np.int)
         self.m_kt_prime = np.zeros(self.m.shape)
-        self.n = np.zeros((len(X), initial_mmax), dtype=np.int)
+        self.n = np.zeros((len(X), self._initial_k), dtype=np.int)
         for epoch, documents in enumerate(self.rest2epoch):
             for d in documents:
                 dtables = set(self.word2table[d])
@@ -252,33 +265,22 @@ class IDTM(TopicModel):
                 for table_k in self.word2table[d]:
                     self.n[d][table_k] += 1
         ## Component Lifespans
-        self.K_life = np.zeros((initial_kmax, 2), dtype=np.int)
+        self.K_life = np.zeros((self._initial_k, 2), dtype=np.int)
         for k in range(self.K_life.shape[0]):
             if len((self.m[:,k] != 0).nonzero()[0]) == 0:
                 continue
             self.K_life[k] = [(self.m[:,k] != 0).nonzero()[0].min(), (self.m[:,k] != 0).nonzero()[0].max()]
-        ## Initialize Base Distribution
-        print("Initializing Components")
-        self._H = stats.multivariate_normal(np.zeros(self.V), self._sigma_0)
         ## Initialize Word Counts 
         ## Z: [t x k_max x V] frequency of each word for each k for each t
         ## v: [n x m_max x V]: frequency of each word in each table for each document
-        self.Z = np.zeros((self._t, initial_kmax, self.V), dtype=np.int)
-        self.v = np.zeros((len(X), initial_mmax, self.V), dtype=np.int)
+        self.Z = np.zeros((self._t, self._initial_k, self.V), dtype=np.int)
+        self.v = np.zeros((len(X), self._initial_k, self.V), dtype=np.int)
         for epoch, documents in enumerate(self.rest2epoch):
             for d in documents:
                 for w_d, t_d in zip(X[d], self.word2table[d]):
                     k_d = self.table2dish[d][t_d]
                     self.Z[epoch,k_d,w_d] += 1
                     self.v[d, t_d, w_d] += 1
-        ## Initialize Components [t x k_max x V]
-        self.phi = np.zeros(self.Z.shape)
-        for e, Ze in enumerate(self.Z):
-            self.phi[e] = np.divide((Ze - Ze.mean(axis=1,keepdims=True)).astype(float),
-                                    Ze.std(axis=1,keepdims=True).astype(float),
-                                    where=Ze.std(axis=1,keepdims=True)>0,
-                                    out=np.zeros_like(Ze).astype(float))
-        self.phi_T = logistic_transform(self.phi, axis=2, keepdims=True)
         ## Initialize Concetration Parameters
         if self._n_filter > 0:
             self.gamma = self._gamma_filter * np.ones(self._t)
@@ -775,6 +777,7 @@ class IDTM(TopicModel):
             print("Max # Tables:", max(list(map(max,self.word2table))))
             print("Number of New Components Per Sampling Stage:", k_created)
             print("Proposal Acceptance Rate:", n_accept[0] / n_accept[1])
+            print("Acceptance Outcomes:",self._acceptance.astype(int))
             print("Alpha:", self.alpha)
             print("Gamma", self.gamma)
             print("Eta:", self.m.sum(axis=0))

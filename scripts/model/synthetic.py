@@ -365,7 +365,9 @@ def main():
     ## Parse Command Line
     model_type = sys.argv[1]
     model = None
-    model_checkpoint_directory = f"{OUTPUT_DIR}{model_type}/"
+    model_directory = f"{OUTPUT_DIR}{model_type}/"
+    ## Create Model Directory
+    _ = make_directory(model_directory, remove_existing=True)
     # Fit Models
     if sys.argv[1] == "lda":
         print("Fitting LDA Model")
@@ -381,7 +383,7 @@ def main():
                     alpha=0.01,
                     eta=0.01)
         model = model.fit(data["data"]["X"],
-                          checkpoint_location=model_checkpoint_directory,
+                          checkpoint_location=model_directory,
                           checkpoint_frequency=1000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "hdp":
@@ -399,7 +401,7 @@ def main():
                     threshold=0.01,
                     seed=42)
         model = model.fit(data["data"]["X"],
-                          checkpoint_location=model_checkpoint_directory,
+                          checkpoint_location=model_directory,
                           checkpoint_frequency=1000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "dtm":
@@ -420,26 +422,25 @@ def main():
         model = model.fit(data["data"]["X"],
                           labels=data["data"]["t"],
                           labels_key="timepoint",
-                          checkpoint_location=model_checkpoint_directory,
+                          checkpoint_location=model_directory,
                           checkpoint_frequency=1000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "idtm":
         print("Fitting iDTM Model")
         model = IDTM(vocabulary=data["data"]["vocabulary"],
-                     initial_k=5,
-                     initial_m=10,
+                     initial_k=6,
                      alpha_0_a=1,
                      alpha_0_b=1,
                      gamma_0_a=1,
                      gamma_0_b=1,
-                     sigma_0=1e-2,
+                     sigma_0=1,
                      rho_0=1e-2,
-                     delta=8,
-                     lambda_0=10,
+                     delta=4,
+                     lambda_0=1,
                      q=5,
                      t=n_timepoints,
-                     q_dim=3,
-                     q_var=1e-4,
+                     q_dim=2,
+                     q_var=1e-2,
                      q_weight=0.5,
                      q_type="hmm",
                      alpha_filter=4,
@@ -447,8 +448,8 @@ def main():
                      n_filter=5,
                      threshold=None,
                      k_filter_frequency=None,
-                     batch_size=500,
-                     n_iter=100,
+                     batch_size=None,
+                     n_iter=1000,
                      n_burn=1,
                      cache_rate=1,
                      cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
@@ -457,24 +458,22 @@ def main():
                      verbose=True)
         model = model.fit(data["data"]["X"],
                           data["data"]["t"],
-                          checkpoint_location=model_checkpoint_directory,
-                          checkpoint_frequency=10)
+                          checkpoint_location=model_directory,
+                          checkpoint_frequency=100)
         model_infer = model.theta
     ## Save Models and Trace Plots
     if model is None:
         raise ValueError("Model selected is not available.")
-    ## Create Model Directory
-    _ = make_directory(f"{OUTPUT_DIR}{model_type}/", remove_existing=True)
     ## Save Model
     print("Saving {} Model".format(model_type.upper()))
-    _ = model.save(f"{OUTPUT_DIR}{model_type}/model.joblib")
-    ## Trace Plots
-    print("Generating Trace Plots for {} Model".format(model_type.upper()))
-    _ = plot_traces(model, model_type, random_seed=42)
+    _ = model.save(f"{model_directory}/model.joblib")
     ## Vocabulary Evolution
     if isinstance(model, DTM) or isinstance(model, IDTM):
         print("Generating Evolution Plots for {} Model".format(model_type.upper()))
         _ = plot_evolution(model, model_type)
+    ## Trace Plots
+    print("Generating Trace Plots for {} Model".format(model_type.upper()))
+    _ = plot_traces(model, model_type, random_seed=42)
     ## Learned Topic Distribution Over Epochs
     df = pd.DataFrame(np.hstack([data["data"]["t"].reshape(-1,1), model_infer]))
     df_agg = df.groupby(0).mean()
@@ -484,7 +483,7 @@ def main():
     plt.xlabel("Epoch", fontweight="bold")
     plt.ylabel("Component", fontweight="bold")
     plt.tight_layout()
-    plt.savefig(f"{OUTPUT_DIR}{model_type}/topic_recovery.png", dpi=100)
+    plt.savefig(f"{model_directory}/topic_recovery.png", dpi=100)
     plt.close()
 
 ###################

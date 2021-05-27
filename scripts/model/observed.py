@@ -20,23 +20,42 @@ MIN_WORDS_PER_DOCUMENT = 25
 MAX_VOCAB_SIZE = 1000
 
 ## Topic Model Parameters
-MODEL_TYPE = "hdp"
+MODEL_TYPE = "idtm"
 MODEL_PARAMS = {
 
-    "initial_k":50,
-    "rm_top":100,
+    # "initial_k":50,
+    # "rm_top":100,
 
-    "alpha":0.1,
-    "eta":0.1,
+    # "alpha":0.1,
+    # "eta":0.1,
 
     # "alpha_var":0.001,
     # "eta_var":0.001,
     # "phi_var":0.001,
 
-    "cache_rate":10,
+    "initial_k":100,
+    "alpha_0_a":1,
+    "alpha_0_b":1,
+    "gamma_0_a":1,
+    "gamma_0_b":1,
+    "sigma_0":1,
+    "rho_0":1e-2,
+    "q":5,
+    "q_dim":2,
+    "q_var":1e-2,
+    "q_weight":0.5,
+    "q_type":"hmm",
+    "alpha_filter":4,
+    "gamma_filter":10,
+    "n_filter":5,
+    "batch_size":None,
+    "delta":4,
+    "lambda_0":10,
+
+    "cache_rate":1,
     "cache_params":set(["alpha","phi","theta"]),
             
-    "n_iter":1000,
+    "n_iter":10,
     "n_burn":1,
     "jobs":8,
     "verbose":True,
