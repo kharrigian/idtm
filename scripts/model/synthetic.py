@@ -239,7 +239,8 @@ def align_components(phi_true,
 
 def plot_traces(model,
                 model_type,
-                random_seed=42):
+                random_seed=42,
+                min_component_support=1):
     """
 
     """
@@ -268,23 +269,23 @@ def plot_traces(model,
                                    replace=False)
         for doc_id in tqdm(doc_ids, desc="Document-Topic Trace Plots", file=sys.stdout):
             figure = model.plot_document_trace(doc_id, n_plot_topics)
-            if figure is not None:
+            if isinstance(figure, tuple) and figure[0] is not None:
                 figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/theta_{doc_id}.png", dpi=100)
                 plt.close(figure[0])
     ## Acceptance Trace (iDTM only)
-    if isinstance(model, IDTM):
+    if "acceptance" in trace_params and isinstance(model, IDTM):
         figure = model.plot_acceptance_trace()
-        if figure is not None:
+        if isinstance(figure, tuple) and figure[0] is not None:
             figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/acceptance.png", dpi=100)
             plt.close(figure[0])
     ## Eta (iDTM only)
     if "eta" in trace_params and isinstance(model, IDTM):
         figure = model.plot_eta_trace()
-        if figure is not None:
+        if isinstance(figure, tuple) and figure[0] is not None:
             figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/eta.png", dpi=100)
             plt.close(figure[0])
     ## Alpha, Gamma, and Phi Traces
-    for epoch in tqdm(trace_epochs, desc="Alpha, Gamma, and Phi Trace Plots", file=sys.stdout):
+    for epoch in tqdm(trace_epochs, desc="Alpha, Gamma, and Phi Trace Plots", file=sys.stdout, position=0, leave=True):
         epoch_name = epoch if epoch is not None else "all"
         if not any(i in trace_params for i in ["alpha","gamma","phi","eta"]):
             continue
@@ -292,25 +293,29 @@ def plot_traces(model,
             if not isinstance(model, IDTM):
                 figure = model.plot_alpha_trace(epoch=epoch,
                                                 top_k_topics=n_plot_topics)
-                if figure is not None:
+                if isinstance(figure, tuple) and figure[0] is not None:
                     figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
                     plt.close(figure[0])
             else:
                 figure = model.plot_alpha_trace(epochs=[epoch])
-                if figure is not None:
+                if isinstance(figure, tuple) and figure[0] is not None:
                     figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/alpha_{epoch_name}.png", dpi=100)
                     plt.close(figure[0])
         if "gamma" in trace_params and isinstance(model, IDTM):
             figure = model.plot_gamma_trace(epochs=[epoch])
-            if figure is not None:
+            if isinstance(figure, tuple) and figure[0] is not None:
                 figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/gamma_{epoch_name}.png", dpi=100)
                 plt.close(figure[0])
         if "phi" in trace_params:
-            for kdim in range(n_dims):
+            for kdim in tqdm(range(n_dims), desc="Component", file=sys.stdout, position=1, leave=False):
+                if isinstance(model, IDTM) and model.m[epoch,kdim] < min_component_support:
+                    continue
+                if isinstance(model, IDTM) and (epoch < model.K_life[kdim][0] or epoch > model.K_life[kdim][1]):
+                    continue
                 figure = model.plot_topic_trace(topic_id=kdim,
                                                 epoch=epoch,
                                                 top_k_terms=n_plot_terms)
-                if figure is not None:
+                if isinstance(figure, tuple) and figure[0] is not None:
                     figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
                     plt.close(figure[0])
 
@@ -327,12 +332,18 @@ def plot_evolution(model,
         n_plot_terms = model.V
     ## Directory
     _ = make_directory(f"{OUTPUT_DIR}{model_type}/vocabulary_evolution/", remove_existing=True)
+    ## Component Mask
+    if isinstance(model, IDTM):
+        component_mask = (model.m.sum(axis=0) / model.m.sum() > 0.001).nonzero()[0]
+        component_mask = set(component_mask)
     ## Cycle Through Components
     for component in tqdm(range(n_plot_topics), desc="Evolution Plots", file=sys.stdout, total=n_plot_topics):
+        if isinstance(model, IDTM) and component not in component_mask:
+            continue
         figure = model.plot_topic_evolution(topic_id=component,
                                             top_k_terms=n_plot_terms,
                                             top_k_type=np.nanmean)
-        if figure is not None:
+        if isinstance(figure, tuple) and figure[0] is not None:
             figure[0].savefig(f"{OUTPUT_DIR}{model_type}/vocabulary_evolution/topic_{component}.png",dpi=100)
             plt.close(figure[0])
     
@@ -346,8 +357,8 @@ def main():
     ## Generate Data
     data = generate_data(beta_0=1e-1,
                          beta_1=1e-1,
-                         n_mu=100,
-                         m_mu=20,
+                         n_mu=250,
+                         m_mu=50,
                          gamma=10)
     ## Number of Timepoints
     n_timepoints = max(data["data"]["t"]) + 1
@@ -384,7 +395,7 @@ def main():
                     eta=0.01)
         model = model.fit(data["data"]["X"],
                           checkpoint_location=model_directory,
-                          checkpoint_frequency=1000)
+                          checkpoint_frequency=10000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "hdp":
         print("Fitting HDP Model")
@@ -402,7 +413,7 @@ def main():
                     seed=42)
         model = model.fit(data["data"]["X"],
                           checkpoint_location=model_directory,
-                          checkpoint_frequency=1000)
+                          checkpoint_frequency=10000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "dtm":
         print("Fitting DTM Model")
@@ -423,24 +434,24 @@ def main():
                           labels=data["data"]["t"],
                           labels_key="timepoint",
                           checkpoint_location=model_directory,
-                          checkpoint_frequency=1000)
+                          checkpoint_frequency=10000)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "idtm":
         print("Fitting iDTM Model")
         model = IDTM(vocabulary=data["data"]["vocabulary"],
                      initial_k=6,
-                     alpha_0_a=1,
-                     alpha_0_b=1,
-                     gamma_0_a=1,
-                     gamma_0_b=1,
+                     alpha_0_a=.1,
+                     alpha_0_b=.1,
+                     gamma_0_a=.1,
+                     gamma_0_b=.1,
                      sigma_0=1,
-                     rho_0=1e-2,
-                     delta=4,
+                     rho_0=1e-3,
+                     delta=8,
                      lambda_0=1,
                      q=5,
                      t=n_timepoints,
-                     q_dim=2,
-                     q_var=1e-2,
+                     q_dim=3,
+                     q_var=1e-1,
                      q_weight=0.5,
                      q_type="hmm",
                      alpha_filter=4,
@@ -449,7 +460,7 @@ def main():
                      threshold=None,
                      k_filter_frequency=None,
                      batch_size=None,
-                     n_iter=1000,
+                     n_iter=20,
                      n_burn=1,
                      cache_rate=1,
                      cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
@@ -473,18 +484,28 @@ def main():
         _ = plot_evolution(model, model_type)
     ## Trace Plots
     print("Generating Trace Plots for {} Model".format(model_type.upper()))
-    _ = plot_traces(model, model_type, random_seed=42)
+    mmin = 0
+    if isinstance(model, IDTM):
+        mmin = int(model.m.sum() * 0.001)
+    _ = plot_traces(model, model_type, random_seed=42, min_component_support=mmin)
     ## Learned Topic Distribution Over Epochs
     df = pd.DataFrame(np.hstack([data["data"]["t"].reshape(-1,1), model_infer]))
     df_agg = df.groupby(0).mean()
     df_agg = df_agg.apply(lambda x: x/sum(x), axis=1)
+    if isinstance(model, IDTM):
+        component_mask = ((model.m.sum(axis=0) / model.m.sum()) >= 0.001).nonzero()[0] + 1
+        df_agg = df_agg[component_mask]
     ## Make Plot
-    plt.imshow(df_agg.T, aspect="auto", cmap=plt.cm.Reds)
-    plt.xlabel("Epoch", fontweight="bold")
-    plt.ylabel("Component", fontweight="bold")
-    plt.tight_layout()
-    plt.savefig(f"{model_directory}/topic_recovery.png", dpi=100)
-    plt.close()
+    fig, ax = plt.subplots(figsize=(10,5.6))
+    ax.imshow(df_agg.T, aspect="auto", cmap=plt.cm.Reds)
+    ax.set_xlabel("Epoch", fontweight="bold")
+    ax.set_ylabel("Component", fontweight="bold")
+    ax.set_xticks(range(df_agg.shape[1]))
+    ax.set_xticklabels([i-1 for i in df_agg.columns])
+    ax.tick_params(labelsize=6)
+    fig.tight_layout()
+    fig.savefig(f"{model_directory}/topic_recovery.png", dpi=100)
+    plt.close(fig)
 
 ###################
 ### Execute

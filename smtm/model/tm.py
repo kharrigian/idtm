@@ -294,10 +294,10 @@ class BaseTomotopy(TopicModel):
                     self._theta.append((iteration, theta_iter))
                 if "alpha" in self.cache_params:
                     self._alpha.append((iteration, self.model.alpha))
-            self._current_iteration += 1
-            if checkpoint_location is not None and (iteration + 1) % checkpoint_frequency == 0:
+            if checkpoint_location is not None and (self._current_iteration + 1) % checkpoint_frequency == 0:
                 _ = make_directory(checkpoint_location, remove_existing=False)
                 _ = self.save(f"{checkpoint_location}model.joblib")
+            self._current_iteration += 1
         ## Cache Final Parameters
         if isinstance(self.model, tp.DTModel):
             self.phi = np.stack([np.vstack([self.model.get_topic_word_dist(topic,timepoint) for topic in range(self.model.k)]) for timepoint in range(self.model.num_timepoints)])

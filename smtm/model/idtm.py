@@ -967,6 +967,8 @@ class IDTM(TopicModel):
         """
 
         """
+        if "theta" not in self.cache_params or len(self._theta_cache) == 0:
+            return None, None
         ## Get All Component Paths
         m = len(self._theta_cache)
         paths = [self._get_component_path(k) for k in range(self.theta.shape[1])]
@@ -985,6 +987,9 @@ class IDTM(TopicModel):
                 p_data[iteration] = mcmc_data
             epochs.append(p_epochs)
             data.append(p_data)
+        ## Check Data
+        if len(data) == 0:
+            return None, None
         ## Format
         epochs = np.stack(epochs)
         data = np.stack(data)
@@ -1016,6 +1021,8 @@ class IDTM(TopicModel):
         """
 
         """
+        if "phi" not in self.cache_params or len(self._phi_cache) == 0:
+            return None, None
         ## Initialize Figure
         fig, ax = plt.subplots(1, 2, figsize=(10,5.8), sharex=False, sharey=False)
         ## Get Terms
@@ -1033,7 +1040,7 @@ class IDTM(TopicModel):
                                          alpha=alpha,
                                          transform=transform)
         if fig is None:
-            return None
+            return None, None
         ## Plot Trace
         fig, ax[1] = self._plot_phi_trace(epoch=epoch,
                                           k=topic_id,
@@ -1042,7 +1049,7 @@ class IDTM(TopicModel):
                                           ax=ax[1],
                                           transform=transform)
         if fig is None:
-            return None
+            return None, None
         fig.tight_layout()
         return fig, ax
 
@@ -1052,6 +1059,9 @@ class IDTM(TopicModel):
         """
 
         """
+        ## Check Existence
+        if "acceptance" not in self.cache_params or len(self._acceptance_cache) == 0:
+            return None, None
         ## Parameter Paths
         components = range(self.phi.shape[1])
         paths = [(k,self._get_component_path(k)) for k in components]
@@ -1059,7 +1069,6 @@ class IDTM(TopicModel):
         epochs = []
         data = []
         kvals = []
-        all_epochs = set()
         for k, kpath in paths:
             kvals.append(k)
             kdata = np.zeros(len(kpath)) * np.nan
@@ -1069,16 +1078,21 @@ class IDTM(TopicModel):
                     continue
                 kdata[j] = self._acceptance_cache[j][1][kind]
                 kepochs[j] = self._acceptance_cache[j][0]
-                all_epochs.add(kepochs[j])
             epochs.append(kepochs)
             data.append(kdata)
+        if len(data) == 0:
+            return None, None
         epochs = np.stack(epochs)
         data = np.stack(data)
         ## Acceptance Rate
         nn_by_epoch = (~np.isnan(data)).sum(axis=0)
         accept = np.nansum(data,axis=0)
-        accept_rate = accept / nn_by_epoch
-        accept_epochs = sorted(all_epochs)
+        accept_rate = np.divide(accept, nn_by_epoch, out=np.zeros_like(accept), where=nn_by_epoch>0)
+        accept_epochs = [i[0] for i in self._acceptance_cache]
+        ## Component Acceptance Rate
+        nn_by_component = (~np.isnan(data)).sum(axis=1)
+        accept_component = np.nansum(data,axis=1)
+        accept_rate_component =  np.divide(accept_component, nn_by_component, out=np.zeros_like(accept_component), where=nn_by_component>0)
         ## Plot
         if fig is None or ax is None:
             fig, ax = plt.subplots(figsize=(10,5.8))
@@ -1150,6 +1164,8 @@ class IDTM(TopicModel):
         """
 
         """
+        if "alpha" not in self.cache_params or len(self._alpha_cache) == 0:
+            return None, None
         fig, ax = self._plot_concentration_trace("alpha", epochs=epochs)
         return fig, ax
     
@@ -1158,6 +1174,8 @@ class IDTM(TopicModel):
         """
 
         """
+        if "gamma" not in self.cache_params or len(self._gamma_cache) == 0:
+            return None, None
         fig, ax = self._plot_concentration_trace("gamma", epochs=epochs)
         return fig, ax
 

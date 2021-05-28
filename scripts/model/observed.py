@@ -33,7 +33,7 @@ MODEL_PARAMS = {
     # "eta_var":0.001,
     # "phi_var":0.001,
 
-    "initial_k":100,
+    "initial_k":20,
     "alpha_0_a":1,
     "alpha_0_b":1,
     "gamma_0_a":1,
@@ -53,7 +53,7 @@ MODEL_PARAMS = {
     "lambda_0":10,
 
     "cache_rate":1,
-    "cache_params":set(["alpha","phi","theta"]),
+    "cache_params":set(["alpha","phi","theta","acceptance","eta"]),
             
     "n_iter":10,
     "n_burn":1,
@@ -421,10 +421,10 @@ def plot_proportions_stacked(prop_mu,
     fig.autofmt_xdate()
     return fig, ax
 
-
 def plot_traces(model,
                 model_type,
-                random_seed=42):
+                random_seed=42,
+                min_component_support=1):
     """
 
     """
@@ -454,23 +454,23 @@ def plot_traces(model,
                                    replace=False)
         for doc_id in tqdm(doc_ids, desc="Document-Topic Trace Plots", file=sys.stdout):
             figure = model.plot_document_trace(doc_id, n_plot_topics)
-            if figure is not None:
+            if isinstance(figure, tuple) and figure[0] is not None:
                 figure[0].savefig(f"{OUTPUT_DIR}/trace/theta_{doc_id}.png", dpi=100)
                 plt.close(figure[0])
     ## Acceptance Trace (iDTM only)
-    if isinstance(model, IDTM):
+    if "acceptance" in trace_params and isinstance(model, IDTM):
         figure = model.plot_acceptance_trace()
-        if figure is not None:
+        if isinstance(figure, tuple) and figure[0] is not None:
             figure[0].savefig(f"{OUTPUT_DIR}/trace/acceptance.png", dpi=100)
             plt.close(figure[0])
     ## Eta (iDTM only)
     if "eta" in trace_params and isinstance(model, IDTM):
         figure = model.plot_eta_trace()
-        if figure is not None:
+        if isinstance(figure, tuple) and figure[0] is not None:
             figure[0].savefig(f"{OUTPUT_DIR}/trace/eta.png", dpi=100)
             plt.close(figure[0])
     ## Alpha, Gamma, and Phi Traces
-    for epoch in tqdm(trace_epochs, desc="Alpha, Gamma, and Phi Trace Plots", file=sys.stdout):
+    for epoch in tqdm(trace_epochs, desc="Alpha, Gamma, and Phi Trace Plots", file=sys.stdout, position=0, leave=True):
         epoch_name = epoch if epoch is not None else "all"
         if not any(i in trace_params for i in ["alpha","gamma","phi","eta"]):
             continue
@@ -478,25 +478,29 @@ def plot_traces(model,
             if not isinstance(model, IDTM):
                 figure = model.plot_alpha_trace(epoch=epoch,
                                                 top_k_topics=n_plot_topics)
-                if figure is not None:
+                if isinstance(figure, tuple) and figure[0] is not None:
                     figure[0].savefig(f"{OUTPUT_DIR}/trace/alpha_{epoch_name}.png", dpi=100)
                     plt.close(figure[0])
             else:
                 figure = model.plot_alpha_trace(epochs=[epoch])
-                if figure is not None:
+                if isinstance(figure, tuple) and figure[0] is not None:
                     figure[0].savefig(f"{OUTPUT_DIR}/trace/alpha_{epoch_name}.png", dpi=100)
                     plt.close(figure[0])
         if "gamma" in trace_params and isinstance(model, IDTM):
             figure = model.plot_gamma_trace(epochs=[epoch])
-            if figure is not None:
+            if isinstance(figure, tuple) and figure[0] is not None:
                 figure[0].savefig(f"{OUTPUT_DIR}/trace/gamma_{epoch_name}.png", dpi=100)
                 plt.close(figure[0])
         if "phi" in trace_params:
-            for kdim in range(n_dims):
+            for kdim in tqdm(range(n_dims), desc="Component", file=sys.stdout, position=1, leave=False):
+                if isinstance(model, IDTM) and model.m[epoch,kdim] < min_component_support:
+                    continue
+                if isinstance(model, IDTM) and (epoch < model.K_life[kdim][0] or epoch > model.K_life[kdim][1]):
+                    continue
                 figure = model.plot_topic_trace(topic_id=kdim,
                                                 epoch=epoch,
                                                 top_k_terms=n_plot_terms)
-                if figure is not None:
+                if isinstance(figure, tuple) and figure[0] is not None:
                     figure[0].savefig(f"{OUTPUT_DIR}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
                     plt.close(figure[0])
 
@@ -517,7 +521,7 @@ def plot_topic_evolution(model):
     ## Generate Figures
     for kdim in tqdm(topic_dims, desc="Topic Evolution Plots", file=sys.stdout):
         figure = model.plot_topic_evolution(kdim, n_plot_terms)
-        if figure is not None:
+        if isinstance(figure, tuple) and figure[0] is not None:
             figure[0].savefig(f"{OUTPUT_DIR}plots/topic_evolution/{kdim}.png", dpi=100)
             plt.close(figure[0])
 
@@ -531,11 +535,12 @@ def extract_dynamic_topic_summary(model,
     time_bins_dt_iso = [t.isoformat() for t in time_bins_dt]
     ## Extract
     component_terms = []
+    vocabulary = model.model.used_vocabs if isinstance(model, DTM) else model.vocabulary
     for c in range(model.phi.shape[1]):
         c_sort = model.phi[:,c,:].argsort(axis=1)[:,-top_k:][:,::-1]
-        c_sort = [[model.model.used_vocabs[i] for i in c] for c in c_sort]
+        c_sort = [[vocabulary[i] for i in c] for c in c_sort]
         c_sort_overall = model.phi[:,c,:].mean(axis=0).argsort()[-top_k * 2:][::-1]
-        c_sort_overall = [model.model.used_vocabs[i] for i in c_sort_overall]
+        c_sort_overall = [vocabulary[i] for i in c_sort_overall]
         component_terms.append((c_sort_overall, pd.DataFrame(c_sort, index=time_bins_dt_iso).T))
     ## Format
     output_str = ""
@@ -588,8 +593,6 @@ def main():
     ## Save Model Summary
     if not isinstance(model, IDTM):
         _ = model.summary(topic_word_top_n=15, file=open(f"{OUTPUT_DIR}topic_model.summary.txt","w"))
-    ## Trace Plots
-    _ = plot_traces(model, MODEL_TYPE, RANDOM_SEED)
     ## Topic Evolution
     if isinstance(model, DTM) or isinstance(model, IDTM):
         ## Plots
@@ -598,6 +601,8 @@ def main():
         topic_summary = extract_dynamic_topic_summary(model, time_bins_dt, 10)
         with open(f"{OUTPUT_DIR}topic_model.dynamic.summary.txt","w") as the_file:
             the_file.write(topic_summary)
+    ## Trace Plots
+    _ = plot_traces(model, MODEL_TYPE, RANDOM_SEED, 5)
     ## Extract Topic Proportions over Time
     prop_mu, prop_low, prop_high = get_topic_proportions(model,
                                                          timestamps_assigned,
