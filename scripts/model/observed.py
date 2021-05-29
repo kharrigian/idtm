@@ -17,51 +17,63 @@ MAX_DATE = "2021-04-01"
 MIN_VOCAB_DF = 50
 MIN_VOCAB_CF = 100
 MIN_WORDS_PER_DOCUMENT = 25
-MAX_VOCAB_SIZE = 1000
+MAX_VOCAB_SIZE = 2500
 
 ## Topic Model Parameters
-MODEL_TYPE = "idtm"
+MODEL_TYPE = "dtm"
+CHECKPOINT_FREQUENCY = 2500
 MODEL_PARAMS = {
 
-    # "initial_k":50,
-    # "rm_top":100,
-
+    # "initial_k":100,
+    # "rm_top":0,
     # "alpha":0.1,
     # "eta":0.1,
+    # "cache_rate":1,
+    # "cache_params":set(["alpha","phi","theta"]),
+    # "n_iter":5000,
 
-    # "alpha_var":0.001,
-    # "eta_var":0.001,
-    # "phi_var":0.001,
+    # "k":100,
+    # "alpha":0.1,
+    # "eta":0.1,
+    # "cache_rate":1,
+    # "cache_params":set(["alpha","phi","theta"]),
+    # "n_iter":5000,
 
-    "initial_k":20,
-    "alpha_0_a":1,
-    "alpha_0_b":1,
-    "gamma_0_a":1,
-    "gamma_0_b":1,
-    "sigma_0":1,
-    "rho_0":1e-2,
-    "q":5,
-    "q_dim":2,
-    "q_var":1e-2,
-    "q_weight":0.5,
-    "q_type":"hmm",
-    "alpha_filter":4,
-    "gamma_filter":10,
-    "n_filter":5,
-    "batch_size":None,
-    "delta":4,
-    "lambda_0":10,
-
+    "alpha_var":0.1,
+    "eta_var":0.1,
+    "phi_var":0.1,
+    "rm_top":0,
     "cache_rate":1,
-    "cache_params":set(["alpha","phi","theta","acceptance","eta"]),
-            
-    "n_iter":10,
+    "cache_params":set(["alpha","phi","theta"]),
+    "n_iter":5000,
+
+    # "initial_k":100,
+    # "alpha_0_a":1,
+    # "alpha_0_b":1,
+    # "gamma_0_a":1,
+    # "gamma_0_b":1,
+    # "sigma_0":1,
+    # "rho_0":1e-2,
+    # "q":5,
+    # "q_dim":2,
+    # "q_var":1e-2,
+    # "q_weight":0.5,
+    # "q_type":"hmm",
+    # "alpha_filter":4,
+    # "gamma_filter":10,
+    # "n_filter":5,
+    # "batch_size":None,
+    # "delta":4,
+    # "lambda_0":10,
+    # "cache_rate":1,
+    # "cache_params":set(["alpha","phi","theta","acceptance","eta"]),
+    # "n_iter":5000,
+
     "n_burn":1,
     "jobs":8,
     "verbose":True,
     "seed":42,
 }
-CHECKPOINT_FREQUENCY = 100
 
 ## Aggregation into Epochs
 AGG_RATE = "3MO"
@@ -69,7 +81,7 @@ AGG_RATE = "3MO"
 ## Script Meta Parameters
 NUM_JOBS = 8
 RANDOM_SEED = 42
-SAMPLE_RATE = 0.1
+SAMPLE_RATE = 0.01
 N_DOC_TOPIC_PLOTS = 30
 MAX_PLOT_TOPICS = 10
 MAX_PLOT_TERMS = 50

@@ -269,8 +269,8 @@ class BaseTomotopy(TopicModel):
         """
         ## Generate Corpora
         corpus_train, missing = self._add_documents(X, labels=labels, labels_key=labels_key)
-        ## Add Corpus to Model
-        _ = self.model.add_corpus(corpus_train)
+        ## Initialize Model
+        self.model = self.model(corpus=corpus_train, **self._kwargs)
         ## (Re-)Initialize Caches
         self._phi = []
         self._alpha = []
@@ -426,8 +426,8 @@ class LDA(BaseTomotopy):
                          cache_params=cache_params,
                          jobs=jobs,
                          verbose=verbose)
-        self.model = tp.LDAModel(**kwargs)
-        self.model.burn_in = n_burn
+        self.model = tp.LDAModel
+        self._kwargs = kwargs
 
     def __repr__(self):
         """
@@ -473,8 +473,8 @@ class HDP(BaseTomotopy):
                          cache_params=cache_params,                         
                          jobs=jobs,
                          verbose=verbose)
-        self.model = tp.HDPModel(**kwargs)
-        self.model.burn_in = n_burn
+        self.model = tp.HDPModel
+        self._kwargs = kwargs
         self._threshold = threshold
 
     def __repr__(self):
@@ -528,8 +528,8 @@ class DTM(BaseTomotopy):
                          cache_params=cache_params,
                          jobs=jobs,
                          verbose=verbose)
-        self.model = tp.DTModel(**kwargs)
-        self.model.burn_in = n_burn
+        self.model = tp.DTModel
+        self._kwargs = kwargs
     
     def plot_topic_evolution(self,
                              topic_id,

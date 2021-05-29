@@ -460,7 +460,7 @@ def main():
                      threshold=None,
                      k_filter_frequency=None,
                      batch_size=None,
-                     n_iter=20,
+                     n_iter=2000,
                      n_burn=1,
                      cache_rate=1,
                      cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
@@ -470,7 +470,7 @@ def main():
         model = model.fit(data["data"]["X"],
                           data["data"]["t"],
                           checkpoint_location=model_directory,
-                          checkpoint_frequency=100)
+                          checkpoint_frequency=250)
         model_infer = model.theta
     ## Save Models and Trace Plots
     if model is None:
