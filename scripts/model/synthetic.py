@@ -358,7 +358,7 @@ def main():
     data = generate_data(beta_0=1e-1,
                          beta_1=1e-1,
                          n_mu=250,
-                         m_mu=50,
+                         m_mu=25,
                          gamma=10)
     ## Number of Timepoints
     n_timepoints = max(data["data"]["t"]) + 1
@@ -386,7 +386,7 @@ def main():
                     n_iter=50000,
                     n_sample=1000,
                     cache_params=["theta","phi","alpha"],
-                    cache_rate=1,
+                    cache_rate=10,
                     verbose=True,
                     jobs=8,
                     k=6,
@@ -403,7 +403,7 @@ def main():
                     n_iter=50000,
                     n_sample=1000,
                     cache_params=["theta","phi","alpha"],
-                    cache_rate=1,
+                    cache_rate=10,
                     verbose=True,
                     jobs=8,
                     initial_k=6,
@@ -421,7 +421,7 @@ def main():
                     n_iter=50000,
                     n_sample=1000,
                     cache_params=["theta","phi","alpha"],
-                    cache_rate=1,
+                    cache_rate=10,
                     verbose=True,
                     jobs=8,
                     t=n_timepoints,
@@ -440,14 +440,14 @@ def main():
         print("Fitting iDTM Model")
         model = IDTM(vocabulary=data["data"]["vocabulary"],
                      initial_k=6,
-                     alpha_0_a=.1,
-                     alpha_0_b=.1,
-                     gamma_0_a=.1,
-                     gamma_0_b=.1,
-                     sigma_0=1,
+                     alpha_0_a=1,
+                     alpha_0_b=1,
+                     gamma_0_a=1,
+                     gamma_0_b=1,
+                     sigma_0=10,
                      rho_0=1e-3,
                      delta=8,
-                     lambda_0=1,
+                     lambda_0=1000,
                      q=5,
                      t=n_timepoints,
                      q_dim=3,
@@ -456,21 +456,21 @@ def main():
                      q_type="hmm",
                      alpha_filter=4,
                      gamma_filter=10,
-                     n_filter=5,
+                     n_filter=10,
                      threshold=None,
                      k_filter_frequency=None,
                      batch_size=None,
                      n_iter=2000,
                      n_burn=1,
-                     cache_rate=1,
-                     cache_params=set(["alpha","gamma","phi","theta","eta","acceptance"]),
+                     cache_rate=10,
+                     cache_params=set(["alpha","phi","acceptance"]),
                      jobs=8,
                      seed=42,
                      verbose=True)
         model = model.fit(data["data"]["X"],
                           data["data"]["t"],
                           checkpoint_location=model_directory,
-                          checkpoint_frequency=250)
+                          checkpoint_frequency=100)
         model_infer = model.theta
     ## Save Models and Trace Plots
     if model is None:

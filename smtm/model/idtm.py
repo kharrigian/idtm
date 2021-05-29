@@ -1248,7 +1248,7 @@ class IDTM(TopicModel):
         n_updates = 0
         for iteration in range(self.n_iter):
             if self.verbose:
-                print("~"*50 + f"\nBeginning Iteration {iteration}\n" + "~" * 50)            
+                print("~"*50 + f"\nBeginning Iteration {iteration+1}\n" + "~" * 50)            
             ## Sample Batches
             sample_indices = list(range(len(X)))
             if self._batch_size is None:

@@ -545,7 +545,7 @@ class DTM(BaseTomotopy):
         data = self.phi[:,topic_id,:]
         terms = self.model.used_vocabs
         if top_k_terms is not None:
-            top_k_i = top_k_type(data, axis=0).argsort()[-top_k_terms:]
+            top_k_i = sorted(top_k_type(data, axis=0).argsort()[-top_k_terms:])
             data = data[:,top_k_i]
             terms = [terms[i] for i in top_k_i]
         ## Plot Evolution
