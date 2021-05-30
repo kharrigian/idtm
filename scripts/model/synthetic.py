@@ -462,8 +462,8 @@ def main():
                      batch_size=None,
                      n_iter=2000,
                      n_burn=1,
-                     cache_rate=10,
-                     cache_params=set(["alpha","phi","acceptance"]),
+                     cache_rate=1,
+                     cache_params=set(["alpha","phi","acceptance","theta"]),
                      jobs=8,
                      seed=42,
                      verbose=True)

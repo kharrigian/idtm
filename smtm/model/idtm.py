@@ -61,12 +61,12 @@ class GaussianProposal(object):
         self.q = []
         ## Convolve Sampled and Current Previous Values
         phi_star = np.zeros_like(phi)
-        phi_star[0] = stats.multivariate_normal(phi[0], self.q_var).rvs()
+        phi_star[0] = np.random.normal(phi[0], self.q_var)
         self.q.append((phi[0], self.q_var))
         for t in range(1, phi.shape[0]):
             q_mu = self.q_weight * phi_star[t-1] + (1 - self.q_weight) * phi[t-1]
             self.q.append((q_mu, self.q_var))
-            phi_star[t] = stats.multivariate_normal(q_mu, self.q_var).rvs()
+            phi_star[t] = np.random.normal(q_mu, self.q_var)
         return phi_star
 
     def score(self,
@@ -107,6 +107,7 @@ class IDTM(TopicModel):
                  n_filter=10, ## Number of filtering iterations
                  threshold=0.01, ## Minimum threshold for topic acceptance
                  k_filter_frequency=None, ## Frequency to filtering topics based on threshold
+                 token_sample_rate=None, ## Sample Rate for Tokens
                  batch_size=None, ## Batch size
                  binarize=False, ## Whether to binarize the document term matrix
                  vocabulary=None, ## Vocabulary
@@ -149,6 +150,7 @@ class IDTM(TopicModel):
         if self._threshold is None:
             self._threshold = 0
         self._k_filter_freq = k_filter_frequency
+        self._token_sample_rate = token_sample_rate
         ## Delta-order Process Parameters
         self._delta = delta
         self._lambda_0 = lambda_0
@@ -177,6 +179,11 @@ class IDTM(TopicModel):
             x_l = list(items.nonzero()[1])
         else:
             x_l = [i for i in items.nonzero()[1] for j in range(items[0,i])]
+        if self._token_sample_rate is not None:
+            x_l_ind = np.where(np.random.rand(len(x_l)) <= 0.25)[0]
+            if len(x_l_ind) == 0:
+                x_l_ind = np.random.choice(len(x_l),1)
+            x_l = [x_l[i] for i in x_l_ind]
         return i, x_l
 
     def _construct_item_frequency_list(self,
@@ -215,6 +222,12 @@ class IDTM(TopicModel):
         else:
             a_norm = a / asum if asum != 0 else 0
         return a_norm
+    
+    def _H_sampler(self):
+        """
+
+        """
+        return np.random.normal(np.zeros(self.V), self._sigma_0)
 
     def _initialize_bookkeeping(self,
                                 X,
@@ -229,10 +242,10 @@ class IDTM(TopicModel):
         print("Initializing Components")
         self._H = stats.multivariate_normal(np.zeros(self.V), self._sigma_0)
         self.phi = np.zeros((self._t, self._initial_k, self.V))
-        self.phi[0] = self._H.rvs(self._initial_k)
+        self.phi[0] = np.random.normal(np.zeros(self.V), self._sigma_0, size=(self._initial_k, self.V))
         for epoch in tqdm(range(1,self._t), total=self._t-1, file=sys.stdout):
             for k in range(self._initial_k):
-                self.phi[epoch,k] = stats.multivariate_normal(self.phi[epoch-1,k], self._rho_0).rvs()
+                self.phi[epoch,k] = np.random.normal(self.phi[epoch-1,k], self._rho_0)
         ## Transform Components
         self.phi_T = logistic_transform(self.phi, axis=2, keepdims=True)
         ## Epoch Associated with Each Document
@@ -289,7 +302,7 @@ class IDTM(TopicModel):
             self.gamma = stats.gamma(self._gamma_0[0],scale=1/self._gamma_0[1]).rvs(self._t)
             self.alpha = stats.gamma(self._alpha_0[0],scale=1/self._alpha_0[1]).rvs(self._t)
         ## Initialize Auxiliary Variable Sampler 
-        self._phi_aux = self._H.rvs(self._q)
+        self._phi_aux = np.random.normal(np.zeros(self.V), self._sigma_0, size=(self._q, self.V))
         if self._q == 1:
             self._phi_aux = self._phi_aux.reshape(1,-1)
         self._phi_aux_T = logistic_transform(self._phi_aux, axis=1, keepdims=True)
@@ -539,7 +552,7 @@ class IDTM(TopicModel):
                         self.Z[epoch, k_sample] += self.v[document][table]
                         ## Update Component for Unused Component
                         if k_sample not in k_used:
-                            self.phi[epoch,k_sample] = stats.multivariate_normal(self.phi[epoch-1,k_sample], self._rho_0).rvs()
+                            self.phi[epoch,k_sample] = np.random.normal(self.phi[epoch-1,k_sample], self._rho_0)
                             self.phi_T[epoch,k_sample] = logistic_transform(self.phi[epoch,k_sample])
                         ## Update Lifespan
                         self.K_life[k_sample,1] = max(epoch, self.K_life[k_sample,1])
@@ -567,7 +580,7 @@ class IDTM(TopicModel):
                         self.phi[epoch,k_new_ind] = self._phi_aux[k_aux]
                         self.phi_T[epoch,k_new_ind] = self._phi_aux_T[k_aux]
                         ## Sample New Auxiliary Component
-                        self._phi_aux[k_aux] = self._H.rvs()
+                        self._phi_aux[k_aux] = self._H_sampler()
                         self._phi_aux_T[k_aux] = logistic_transform(self._phi_aux[k_aux])
                         ## Add to Live Components
                         self.K_life[k_new_ind] = [epoch, epoch]
@@ -645,7 +658,7 @@ class IDTM(TopicModel):
                             self.K_life[k_sampled,1] = max(self.K_life[k_sampled,1], epoch)
                             ## Update Component for Unused Component
                             if k_sampled not in k_used:
-                                self.phi[epoch,k_sampled] = stats.multivariate_normal(self.phi[epoch-1,k_sampled], self._rho_0).rvs()
+                                self.phi[epoch,k_sampled] = np.random.normal(self.phi[epoch-1,k_sampled], self._rho_0)
                                 self.phi_T[epoch,k_sampled] = logistic_transform(self.phi[epoch,k_sampled])
                         ## Case 2: Sampled a New Component
                         else:
@@ -675,7 +688,7 @@ class IDTM(TopicModel):
                             self.phi[epoch,k_new_ind] = self._phi_aux[k_aux]
                             self.phi_T[epoch,k_new_ind] = self._phi_aux_T[k_aux]
                             ## Sample New Auxiliary Component
-                            self._phi_aux[k_aux] = self._H.rvs()
+                            self._phi_aux[k_aux] = self._H_sampler()
                             self._phi_aux_T[k_aux] = logistic_transform(self._phi_aux[k_aux])
         ## Filtering Mode
         print("Sampling Concentration Parameters")
@@ -727,7 +740,7 @@ class IDTM(TopicModel):
             ## Generate Proposal Distribution and Sample from It
             if phi_k.shape[0] == 1: ## Case 1: Only One Epoch
                 qfunc = None
-                phi_k_star = stats.multivariate_normal(phi_k[0], self._q_var).rvs()
+                phi_k_star = np.random.normal(phi_k[0], self._q_var)
             else:
                 if self._q_type == "hmm":
                     try:
@@ -736,6 +749,7 @@ class IDTM(TopicModel):
                                         covariance_type="diag",
                                         n_iter=10,
                                         means_prior=0,
+                                        means_weight=1e-5,
                                         covars_prior=self._q_var,
                                         random_state=self._seed,
                                         verbose=False)
@@ -829,7 +843,10 @@ class IDTM(TopicModel):
         for j, kind in enumerate(kpath):
             if kind is None:
                 continue
-            jepoch, jphi = self._phi_cache[j]
+            j_phi = [i for i in self._phi_cache if i[0] == j]
+            if len(j_phi) == 0:
+                continue
+            jepoch, jphi = j_phi[0]
             if iter_min is not None and jepoch < iter_min:
                 continue
             if iter_max is not None and jepoch > iter_max:
@@ -976,12 +993,15 @@ class IDTM(TopicModel):
         epochs = []
         data = []
         for k, p in enumerate(paths):
-            p_epochs = np.zeros(m) * np.nan
-            p_data = np.zeros(m) * np.nan
+            p_epochs = np.zeros(len(paths[0])) * np.nan
+            p_data = np.zeros(len(paths[0])) * np.nan
             for iteration, k_ind in enumerate(p):
                 if k_ind is None:
                     continue
-                mcmc_epoch, mcmc_data = self._theta_cache[iteration]
+                iter_cache = [i for i in self._theta_cache if i[0] == iteration]
+                if len(iter_cache) == 0:
+                    continue
+                mcmc_epoch, mcmc_data = iter_cache[0]
                 mcmc_data = mcmc_data[doc_id,k_ind]
                 p_epochs[iteration] = mcmc_epoch
                 p_data[iteration] = mcmc_data
@@ -996,7 +1016,7 @@ class IDTM(TopicModel):
         ## Identify Top K
         components = range(data.shape[0])
         if top_k is not None:
-            components = sorted(data.mean(axis=1).argsort()[-top_k:][::-1])
+            components = sorted(np.nanmean(data,axis=1).argsort()[-top_k:][::-1])
         ## Make Figure
         if fig is None or ax is None:
             fig, ax = plt.subplots(figsize=(10,5.6))
@@ -1076,8 +1096,11 @@ class IDTM(TopicModel):
             for j, kind in enumerate(kpath):
                 if kind is None:
                     continue
-                kdata[j] = self._acceptance_cache[j][1][kind]
-                kepochs[j] = self._acceptance_cache[j][0]
+                j_accept = [i for i in self._acceptance_cache if i[0] == j]
+                if len(j_accept) == 0:
+                    continue
+                kdata[j] = j_accept[0][1][kind]
+                kepochs[j] = j_accept[0][0]
             epochs.append(kepochs)
             data.append(kdata)
         if len(data) == 0:
@@ -1101,7 +1124,8 @@ class IDTM(TopicModel):
             dplot[d==1] = component
             ax.scatter(e, dplot, alpha=0.8)
         ax2 = ax.twinx()
-        ax2.plot(accept_epochs, accept_rate, color="black", linewidth=2, alpha=0.5, marker="x")
+        nn_epochs = np.where((~np.isnan(epochs)).any(axis=0))[0]
+        ax2.plot(accept_epochs, accept_rate[nn_epochs], color="black", linewidth=2, alpha=0.5, marker="x")
         for a in [ax, ax2]:
             a.set_xlim(-.5, np.nanmax(epochs)+.5)
             a.spines["top"].set_visible(False)
@@ -1137,8 +1161,11 @@ class IDTM(TopicModel):
             for j, kind in enumerate(kpath):
                 if kind is None:
                     continue
-                kdata[j] = self._eta_cache[j][1][kind]
-                kepochs[j] = self._eta_cache[j][0]
+                j_eta = [e for e in self._eta_cache if e[0] == j]
+                if len(j_eta) == 0:
+                    continue
+                kdata[j] = j_eta[0][1][kind]
+                kepochs[j] = j_eta[0][0]
                 all_epochs.add(kepochs[j])
             epochs.append(kepochs)
             data.append(kdata)

@@ -17,11 +17,11 @@ MAX_DATE = "2021-04-01"
 MIN_VOCAB_DF = 50
 MIN_VOCAB_CF = 100
 MIN_WORDS_PER_DOCUMENT = 25
-MAX_VOCAB_SIZE = 2500
+MAX_VOCAB_SIZE = 1000
 
 ## Topic Model Parameters
 MODEL_TYPE = "idtm"
-CHECKPOINT_FREQUENCY = 100
+CHECKPOINT_FREQUENCY = 25
 MODEL_PARAMS = {
 
     # "initial_k":100,
@@ -64,12 +64,13 @@ MODEL_PARAMS = {
     "alpha_filter":4,
     "gamma_filter":10,
     "n_filter":5,
+    "token_sample_rate":None,
     "batch_size":None,
     "delta":4,
-    "lambda_0":100,
+    "lambda_0":1000,
     "cache_rate":1,
     "cache_params":set(["alpha","phi","acceptance"]),
-    "n_iter":5000,
+    "n_iter":100,
 
     "n_burn":1,
     "jobs":8,
@@ -83,7 +84,7 @@ AGG_RATE = "3MO"
 ## Script Meta Parameters
 NUM_JOBS = 8
 RANDOM_SEED = 42
-SAMPLE_RATE = 0.01
+SAMPLE_RATE = 0.1
 N_DOC_TOPIC_PLOTS = 30
 MAX_PLOT_TOPICS = 10
 MAX_PLOT_TERMS = 50
