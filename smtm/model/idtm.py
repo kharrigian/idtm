@@ -310,6 +310,7 @@ class IDTM(TopicModel):
         _ = self._clean_up()
         # Update Initialize Component Tracking
         self._component_map = [{i:None for i in range(self.m.shape[1])}]
+        self._removed_components = [set()]
 
     def _polynomial_expand(self,
                            a,
@@ -443,7 +444,8 @@ class IDTM(TopicModel):
 
         """
         ## Get Empty and Nonempty Components
-        nonempty_components = (self.m.sum(axis=0) !=0).nonzero()[0]
+        nonempty_components = (self.m.sum(axis=0) != 0).nonzero()[0]
+        empty_components = set((self.m.sum(axis=0) == 0).nonzero()[0])
         ## New Component Mapping
         old2new_ind = dict(zip(nonempty_components, range(nonempty_components.shape[0])))
         ## Remove Empty Components
@@ -470,7 +472,7 @@ class IDTM(TopicModel):
                 self.v[document] = np.vstack([self.v[document,nonempty_tables],self.v[document,empty_tables]])
                 self.word2table[document] = [old2new_table_ind[w] for w in self.word2table[document]]
                 self.table2dish[document] = [old2new_ind[d] for d in [dishes[n] for n in nonempty_tables]]
-        return old2new_ind
+        return old2new_ind, empty_components
 
     def _train(self,
                X,
@@ -585,7 +587,7 @@ class IDTM(TopicModel):
                         ## Add to Live Components
                         self.K_life[k_new_ind] = [epoch, epoch]
         ####### Step 2: Sample a Table b_tdi for Each Word x_tdi
-        for epoch, epoch_docs in tqdm(enumerate(self.rest2epoch), total=len(self.rest2epoch), desc="Sampling Tables", file=sys.stdout, position=0, leave=True):
+        for epoch, epoch_docs in tqdm(enumerate(self.rest2epoch), total=len(self.rest2epoch), desc="Sampling Table Assignments", file=sys.stdout, position=0, leave=True):
             for document in list(filter(lambda d: d in batch, epoch_docs)):
                 for i, (x_tdi, b_tdi) in enumerate(zip(X[document],self.word2table[document])):
                     ## Current Component
@@ -716,7 +718,7 @@ class IDTM(TopicModel):
                 elif i_gamma_mix == 1:
                     self.gamma[epoch] = stats.gamma(self._gamma_0[0] + K - 1, scale = 1 / (self._gamma_0[1] - np.log(eta))).rvs()
         ## Remove Empty Components
-        new_component_map = self._clean_up()
+        new_component_map, removed_components = self._clean_up()
         ## Get Component Transition Map
         new_component_map_r = {y:x for x, y in new_component_map.items()}
         component_transition_map = {}
@@ -726,6 +728,7 @@ class IDTM(TopicModel):
             else:
                 component_transition_map[active_k] = previous_k
         self._component_map.append(component_transition_map)
+        self._removed_components.append(removed_components)
         ####### Step 5: Sample Components phi_tk using Z
         n_accept = [0,0]
         self._acceptance = np.zeros(self.phi.shape[1])
@@ -788,6 +791,7 @@ class IDTM(TopicModel):
         if self.verbose:
             print("\nIteration {} -- Batch {} Complete\n".format(iteration+1,batch_n)+"~"*50)
             print("# Components:", max(list(map(max,self.table2dish))))
+            print("Components Removed: {}".format(sorted(self._removed_components[-1])))
             print("Max # Tables:", max(list(map(max,self.word2table))))
             print("Number of New Components Per Sampling Stage:", k_created)
             print("Proposal Acceptance Rate:", n_accept[0] / n_accept[1])
@@ -1073,9 +1077,7 @@ class IDTM(TopicModel):
         fig.tight_layout()
         return fig, ax
 
-    def plot_acceptance_trace(self,
-                              fig=None,
-                              ax=None):
+    def _get_acceptance_trace(self):
         """
 
         """
@@ -1107,6 +1109,19 @@ class IDTM(TopicModel):
             return None, None
         epochs = np.stack(epochs)
         data = np.stack(data)
+        return kvals, epochs, data
+
+    def plot_acceptance_trace(self,
+                              fig=None,
+                              ax=None):
+        """
+
+        """
+        ## Get Data
+        components = range(self.phi.shape[1])
+        kvals, epochs, data = self._get_acceptance_trace()
+        if epochs is None:
+            return None, None
         ## Acceptance Rate
         nn_by_epoch = (~np.isnan(data)).sum(axis=0)
         accept = np.nansum(data,axis=0)
@@ -1124,8 +1139,7 @@ class IDTM(TopicModel):
             dplot[d==1] = component
             ax.scatter(e, dplot, alpha=0.8)
         ax2 = ax.twinx()
-        nn_epochs = np.where((~np.isnan(epochs)).any(axis=0))[0]
-        ax2.plot(accept_epochs, accept_rate[nn_epochs], color="black", linewidth=2, alpha=0.5, marker="x")
+        ax2.plot(accept_epochs, accept_rate[accept_epochs], color="black", linewidth=2, alpha=0.5, marker="x")
         for a in [ax, ax2]:
             a.set_xlim(-.5, np.nanmax(epochs)+.5)
             a.spines["top"].set_visible(False)
