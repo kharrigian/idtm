@@ -16,12 +16,12 @@ MAX_DATE = "2021-04-01"
 ## Data Filtering
 MIN_VOCAB_DF = 50
 MIN_VOCAB_CF = 100
-MIN_WORDS_PER_DOCUMENT = 25
-MAX_VOCAB_SIZE = 1000
+MIN_WORDS_PER_DOCUMENT = 10
+MAX_VOCAB_SIZE = 500
 
 ## Topic Model Parameters
 MODEL_TYPE = "idtm"
-CHECKPOINT_FREQUENCY = 25
+CHECKPOINT_FREQUENCY = None
 MODEL_PARAMS = {
 
     # "initial_k":100,
@@ -49,20 +49,20 @@ MODEL_PARAMS = {
     # "cache_params":set(["alpha","phi"]),
     # "n_iter":50000,
 
-    "initial_k":100,
+    "initial_k":20,
     "alpha_0_a":1,
-    "alpha_0_b":1,
+    "alpha_0_b":10,
     "gamma_0_a":1,
-    "gamma_0_b":1,
-    "sigma_0":10,
-    "rho_0":1e-3,
+    "gamma_0_b":10,
+    "sigma_0":1,
+    "rho_0":1,
     "q":5,
-    "q_dim":2,
+    "q_dim":4,
     "q_var":1e-1,
     "q_weight":0.5,
     "q_type":"hmm",
-    "alpha_filter":4,
-    "gamma_filter":10,
+    "alpha_filter":1,
+    "gamma_filter":1,
     "n_filter":5,
     "token_sample_rate":None,
     "batch_size":None,
@@ -70,7 +70,7 @@ MODEL_PARAMS = {
     "lambda_0":1000,
     "cache_rate":1,
     "cache_params":set(["alpha","phi","acceptance"]),
-    "n_iter":100,
+    "n_iter":50,
 
     "n_burn":1,
     "jobs":8,
@@ -115,7 +115,7 @@ from smtm.util.helpers import make_directory, chunks
 #####################
 
 ## Experiment Output Directory
-OUTPUT_DIR = f"./data/results/observed/{MODEL_TYPE}/"
+OUTPUT_DIR = f"./data/results/observed-v2/{MODEL_TYPE}/"
 
 ## Model Classes
 MODELS = {
@@ -512,12 +512,32 @@ def plot_traces(model,
                     continue
                 if isinstance(model, IDTM) and (epoch < model.K_life[kdim][0] or epoch > model.K_life[kdim][1]):
                     continue
-                figure = model.plot_topic_trace(topic_id=kdim,
-                                                epoch=epoch,
-                                                top_k_terms=n_plot_terms)
-                if isinstance(figure, tuple) and figure[0] is not None:
-                    figure[0].savefig(f"{OUTPUT_DIR}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
-                    plt.close(figure[0])
+                if isinstance(model, IDTM):
+                    ## Original Parameter Space
+                    figure = model.plot_topic_trace(topic_id=kdim,
+                                                    epoch=epoch,
+                                                    top_k_terms=n_plot_terms,
+                                                    transform=False)
+                    if isinstance(figure, tuple) and figure[0] is not None:
+                        figure[0].savefig(f"{OUTPUT_DIR}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
+                        plt.close(figure[0])
+                    ## Natural Parameter Space
+                    figure = model.plot_topic_trace(topic_id=kdim,
+                                                    epoch=epoch,
+                                                    top_k_terms=n_plot_terms,
+                                                    transform=True)
+                    if isinstance(figure, tuple) and figure[0] is not None:
+                        figure[0].savefig(f"{OUTPUT_DIR}/trace/transformed_phi_{epoch_name}_{kdim}.png", dpi=100)
+                        plt.close(figure[0])
+                else:
+                    ## Original Parameter Space
+                    figure = model.plot_topic_trace(topic_id=kdim,
+                                                    epoch=epoch,
+                                                    top_k_terms=n_plot_terms)
+                    if isinstance(figure, tuple) and figure[0] is not None:
+                        figure[0].savefig(f"{OUTPUT_DIR}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
+                        plt.close(figure[0])
+
 
 def plot_topic_evolution(model):
     """
@@ -600,11 +620,12 @@ def main():
     elif isinstance(model, IDTM):
         fit_kwargs.update({"timepoints":timestamps_assigned})
     model = model.fit(X,
-                      checkpoint_location=f"{OUTPUT_DIR}",
+                      checkpoint_location=f"{OUTPUT_DIR}" if CHECKPOINT_FREQUENCY is not None else None,
                       checkpoint_frequency=CHECKPOINT_FREQUENCY,
                       **fit_kwargs)
     ## Save Model
-    _ = model.save(f"{OUTPUT_DIR}model.joblib")
+    if CHECKPOINT_FREQUENCY is not None:
+        _ = model.save(f"{OUTPUT_DIR}model.joblib")
     ## Save Model Summary
     if not isinstance(model, IDTM):
         _ = model.summary(topic_word_top_n=15, file=open(f"{OUTPUT_DIR}topic_model.summary.txt","w"))
