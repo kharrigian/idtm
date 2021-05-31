@@ -814,20 +814,25 @@ class IDTM(TopicModel):
         return theta
 
     def _get_component_path(self,
-                            k):
+                            k,
+                            iteration=None):
         """
 
         """
-        k_inds = [None for _ in self._component_map]
-        k_inds[-1] = k
+        if iteration is None:
+            iteration = len(self._component_map)
+        comp_map = self._component_map[:iteration+1]
+        k_inds = [None for _ in comp_map]
         i = -1
-        while True and -i < len(self._component_map) :
-            previous_ind = self._component_map[i].get(k_inds[i],None)
+        k_inds[i] = k
+        while True and -i < len(comp_map) :
+            previous_ind = comp_map[i].get(k_inds[i],None)
             k_inds[i-1] = previous_ind
             i -= 1
             if previous_ind is None:
                 break
         k_inds = k_inds[1:]
+        k_inds = k_inds + [None for _ in range(len(self._component_map) - len(k_inds) - 1)]
         return k_inds
 
     def _get_phi_trace(self,
@@ -835,12 +840,13 @@ class IDTM(TopicModel):
                        k,
                        iter_min=None,
                        iter_max=None,
-                       transform=True):
+                       transform=True,
+                       iteration=None):
         """
 
         """
         ## Get Path
-        kpath = self._get_component_path(k)
+        kpath = self._get_component_path(k, iteration=iteration)
         ## Get Data
         epochs = []
         data = []
@@ -873,12 +879,13 @@ class IDTM(TopicModel):
                        fig=None,
                        ax=None,
                        alpha=0.05,
-                       transform=True):
+                       transform=True,
+                       iteration=None):
         """
 
         """
         ## Get Trace
-        _, data = self._get_phi_trace(epoch, k, min_iter, max_iter, transform=transform)
+        _, data = self._get_phi_trace(epoch, k, min_iter, max_iter, transform=transform, iteration=iteration)
         if data is None:
             return None, None
         ## Compute Percentiles
@@ -925,12 +932,13 @@ class IDTM(TopicModel):
                         indices=None,
                         fig=None,
                         ax=None,
-                        transform=True):
+                        transform=True,
+                        iteration=None):
         """
 
         """
         ## Get Data
-        epochs, data = self._get_phi_trace(epoch, k, None, None, transform=transform)
+        epochs, data = self._get_phi_trace(epoch, k, None, None, transform=transform, iteration=iteration)
         if data is None:
             return None, None
         ## Isolate Desired Components
@@ -984,7 +992,8 @@ class IDTM(TopicModel):
                             doc_id,
                             top_k=None,
                             fig=None,
-                            ax=None):
+                            ax=None,
+                            iteration=None):
         """
 
         """
@@ -992,7 +1001,7 @@ class IDTM(TopicModel):
             return None, None
         ## Get All Component Paths
         m = len(self._theta_cache)
-        paths = [self._get_component_path(k) for k in range(self.theta.shape[1])]
+        paths = [self._get_component_path(k, iteration=iteration) for k in range(self.theta.shape[1])]
         ## Get Data
         epochs = []
         data = []
@@ -1041,7 +1050,8 @@ class IDTM(TopicModel):
                          epoch=None,
                          top_k_terms=None,
                          alpha=0.05,
-                         transform=True):
+                         transform=True,
+                         iteration=None):
         """
 
         """
@@ -1062,7 +1072,8 @@ class IDTM(TopicModel):
                                          fig=fig,
                                          ax=ax[0],
                                          alpha=alpha,
-                                         transform=transform)
+                                         transform=transform,
+                                         iteration=iteration)
         if fig is None:
             return None, None
         ## Plot Trace
@@ -1071,13 +1082,15 @@ class IDTM(TopicModel):
                                           indices=indices,
                                           fig=fig,
                                           ax=ax[1],
-                                          transform=transform)
+                                          transform=transform,
+                                          iteration=iteration)
         if fig is None:
             return None, None
         fig.tight_layout()
         return fig, ax
 
-    def _get_acceptance_trace(self):
+    def _get_acceptance_trace(self,
+                              iteration=None):
         """
 
         """
@@ -1086,7 +1099,7 @@ class IDTM(TopicModel):
             return None, None
         ## Parameter Paths
         components = range(self.phi.shape[1])
-        paths = [(k,self._get_component_path(k)) for k in components]
+        paths = [(k,self._get_component_path(k, iteration=iteration)) for k in components]
         ## Get Data
         epochs = []
         data = []
@@ -1113,13 +1126,14 @@ class IDTM(TopicModel):
 
     def plot_acceptance_trace(self,
                               fig=None,
-                              ax=None):
+                              ax=None,
+                              iteration=None):
         """
 
         """
         ## Get Data
         components = range(self.phi.shape[1])
-        kvals, epochs, data = self._get_acceptance_trace()
+        kvals, epochs, data = self._get_acceptance_trace(iteration=iteration)
         if epochs is None:
             return None, None
         ## Acceptance Rate
@@ -1155,14 +1169,15 @@ class IDTM(TopicModel):
     def plot_eta_trace(self,
                        components=None,
                        fig=None,
-                       ax=None):
+                       ax=None,
+                       iteration=None):
         """
 
         """
         ## Get Paths
         if components is None:
             components = range(self.phi.shape[1])
-        paths = [(k,self._get_component_path(k)) for k in components]
+        paths = [(k,self._get_component_path(k,iteration=iteration)) for k in components]
         ## Get Data
         epochs = []
         data = []
