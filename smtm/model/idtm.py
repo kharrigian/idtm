@@ -483,6 +483,7 @@ class IDTM(TopicModel):
         """
 
         """
+        print("\nBeginning Iteration {} -- Batch {}\n".format(iteration+1,batch_n)+"~"*50+"\n")
         ## Get Batch Indices
         batch = set(batch)
         ## Check for Component Filtering
@@ -693,13 +694,12 @@ class IDTM(TopicModel):
                             self._phi_aux[k_aux] = self._H_sampler()
                             self._phi_aux_T[k_aux] = logistic_transform(self._phi_aux[k_aux])
         ## Filtering Mode
-        print("Sampling Concentration Parameters")
         if iteration < self._n_filter:
             self.alpha = self._alpha_filter * np.ones(self._t)
             self.gamma = self._gamma_filter * np.ones(self._t)
         else:
             ## Cycle Through Epochs
-            for epoch, documents in enumerate(self.rest2epoch):
+            for epoch, documents in tqdm(enumerate(self.rest2epoch), desc="Sampling Concentration Parameters", total=self._t, file=sys.stdout):
                 ## Some Data Information
                 n_J = self.n[documents].sum(axis=1) ## Number of Words Per Document
                 m_J = (self.n[documents] != 0).sum(axis=1) ## Number of Tables per Document
@@ -915,7 +915,10 @@ class IDTM(TopicModel):
                    alpha=0.8,
                    s=50)
         ax.set_ylim(-.5, max(index)+.5)
-        ax.set_xlim(left=max(q["lower"].min() - 0.01, 0))
+        if q["lower"].min() < 0:
+            ax.set_xlim(q["lower"].min() - 0.01)
+        else:
+            ax.set_xlim(left=max(q["lower"].min() - 0.01, 0))
         ax.set_yticks(index)
         ax.legend(loc="lower right", frameon=False)
         ax.spines["top"].set_visible(False)
