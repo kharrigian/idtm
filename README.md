@@ -1,8 +1,11 @@
 # Infinite Dynamic Topic Model (iDTM)
 
 **Johns Hopkins University**
+
 **Nonparametric Bayesian Stats**
+
 **Spring 2021**
+
 **Professor Yanxun Xu**
 
 ## Overview
