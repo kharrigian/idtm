@@ -6,6 +6,9 @@ Synthetic Data Experiments
 ## Where to Plot
 OUTPUT_DIR = "./data/results/synthetic/"
 
+## How Often to Save Model
+CHECKPOINT_FREQUENCY = 10000000
+
 ####################
 ### Imports
 ####################
@@ -312,12 +315,31 @@ def plot_traces(model,
                     continue
                 if isinstance(model, IDTM) and (epoch < model.K_life[kdim][0] or epoch > model.K_life[kdim][1]):
                     continue
-                figure = model.plot_topic_trace(topic_id=kdim,
-                                                epoch=epoch,
-                                                top_k_terms=n_plot_terms)
-                if isinstance(figure, tuple) and figure[0] is not None:
-                    figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
-                    plt.close(figure[0])
+                if isinstance(model, IDTM):
+                    ## Original Parameter Space
+                    figure = model.plot_topic_trace(topic_id=kdim,
+                                                    epoch=epoch,
+                                                    top_k_terms=n_plot_terms,
+                                                    transform=False)
+                    if isinstance(figure, tuple) and figure[0] is not None:
+                        figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
+                        plt.close(figure[0])
+                    ## Natural Parameter Space
+                    figure = model.plot_topic_trace(topic_id=kdim,
+                                                    epoch=epoch,
+                                                    top_k_terms=n_plot_terms,
+                                                    transform=True)
+                    if isinstance(figure, tuple) and figure[0] is not None:
+                        figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/transformed_phi_{epoch_name}_{kdim}.png", dpi=100)
+                        plt.close(figure[0])
+                else:
+                    ## Original Parameter Space
+                    figure = model.plot_topic_trace(topic_id=kdim,
+                                                    epoch=epoch,
+                                                    top_k_terms=n_plot_terms)
+                    if isinstance(figure, tuple) and figure[0] is not None:
+                        figure[0].savefig(f"{OUTPUT_DIR}{model_type}/trace/phi_{epoch_name}_{kdim}.png", dpi=100)
+                        plt.close(figure[0])
 
 def plot_evolution(model,
                    model_type):
@@ -357,7 +379,7 @@ def main():
     ## Generate Data
     data = generate_data(beta_0=1e-1,
                          beta_1=1e-1,
-                         n_mu=250,
+                         n_mu=100,
                          m_mu=25,
                          gamma=10)
     ## Number of Timepoints
@@ -394,8 +416,8 @@ def main():
                     alpha=0.01,
                     eta=0.01)
         model = model.fit(data["data"]["X"],
-                          checkpoint_location=model_directory,
-                          checkpoint_frequency=10000)
+                          checkpoint_location=model_directory if CHECKPOINT_FREQUENCY is not None else None,
+                          checkpoint_frequency=CHECKPOINT_FREQUENCY)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "hdp":
         print("Fitting HDP Model")
@@ -412,13 +434,13 @@ def main():
                     threshold=0.01,
                     seed=42)
         model = model.fit(data["data"]["X"],
-                          checkpoint_location=model_directory,
-                          checkpoint_frequency=10000)
+                          checkpoint_location=model_directory if CHECKPOINT_FREQUENCY is not None else None,
+                          checkpoint_frequency=CHECKPOINT_FREQUENCY)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "dtm":
         print("Fitting DTM Model")
         model = DTM(vocabulary=data["data"]["vocabulary"],
-                    n_iter=50000,
+                    n_iter=100000,
                     n_sample=1000,
                     cache_params=["theta","phi","alpha"],
                     cache_rate=10,
@@ -426,68 +448,59 @@ def main():
                     jobs=8,
                     t=n_timepoints,
                     k=6,
-                    alpha_var=0.01,
-                    eta_var=0.01,
-                    phi_var=0.01,
+                    alpha_var=0.1,
+                    eta_var=0.1,
+                    phi_var=0.1,
                     seed=42)
         model = model.fit(data["data"]["X"],
                           labels=data["data"]["t"],
                           labels_key="timepoint",
-                          checkpoint_location=model_directory,
-                          checkpoint_frequency=10000)
+                          checkpoint_location=model_directory if CHECKPOINT_FREQUENCY is not None else None,
+                          checkpoint_frequency=CHECKPOINT_FREQUENCY)
         model_infer, model_ll = model.theta, model.ll
     if sys.argv[1] == "idtm":
         print("Fitting iDTM Model")
         model = IDTM(vocabulary=data["data"]["vocabulary"],
                      initial_k=6,
-                     alpha_0_a=1,
-                     alpha_0_b=1,
-                     gamma_0_a=1,
-                     gamma_0_b=1,
-                     sigma_0=10,
-                     rho_0=1e-3,
+                     alpha_0_a=.1,
+                     alpha_0_b=10,
+                     gamma_0_a=.1,
+                     gamma_0_b=10,
+                     sigma_0=4,
+                     rho_0=1e-1,
                      delta=8,
-                     lambda_0=1000,
+                     lambda_0=1,
                      q=5,
                      t=n_timepoints,
-                     q_dim=3,
-                     q_var=1e-1,
+                     q_dim=5,
+                     q_var=1,
                      q_weight=0.5,
                      q_type="hmm",
-                     alpha_filter=4,
-                     gamma_filter=10,
-                     n_filter=10,
+                     alpha_filter=1e-2,
+                     gamma_filter=1e-2,
+                     n_filter=5,
                      threshold=None,
                      k_filter_frequency=None,
                      batch_size=None,
-                     n_iter=2000,
+                     n_iter=50,
                      n_burn=1,
                      cache_rate=1,
-                     cache_params=set(["alpha","phi","acceptance","theta"]),
+                     cache_params=set(["alpha","phi","acceptance","eta"]),
                      jobs=8,
                      seed=42,
                      verbose=True)
         model = model.fit(data["data"]["X"],
                           data["data"]["t"],
-                          checkpoint_location=model_directory,
-                          checkpoint_frequency=100)
+                          checkpoint_location=model_directory if CHECKPOINT_FREQUENCY is not None else None,
+                          checkpoint_frequency=CHECKPOINT_FREQUENCY)
         model_infer = model.theta
     ## Save Models and Trace Plots
     if model is None:
         raise ValueError("Model selected is not available.")
     ## Save Model
-    print("Saving {} Model".format(model_type.upper()))
-    _ = model.save(f"{model_directory}/model.joblib")
-    ## Vocabulary Evolution
-    if isinstance(model, DTM) or isinstance(model, IDTM):
-        print("Generating Evolution Plots for {} Model".format(model_type.upper()))
-        _ = plot_evolution(model, model_type)
-    ## Trace Plots
-    print("Generating Trace Plots for {} Model".format(model_type.upper()))
-    mmin = 0
-    if isinstance(model, IDTM):
-        mmin = int(model.m.sum() * 0.001)
-    _ = plot_traces(model, model_type, random_seed=42, min_component_support=mmin)
+    if CHECKPOINT_FREQUENCY is not None:
+        print("Saving {} Model".format(model_type.upper()))
+        _ = model.save(f"{model_directory}/model.joblib")
     ## Learned Topic Distribution Over Epochs
     df = pd.DataFrame(np.hstack([data["data"]["t"].reshape(-1,1), model_infer]))
     df_agg = df.groupby(0).mean()
@@ -500,12 +513,24 @@ def main():
     ax.imshow(df_agg.T, aspect="auto", cmap=plt.cm.Reds)
     ax.set_xlabel("Epoch", fontweight="bold")
     ax.set_ylabel("Component", fontweight="bold")
-    ax.set_xticks(range(df_agg.shape[1]))
-    ax.set_xticklabels([i-1 for i in df_agg.columns])
+    ax.set_xticks(range(df_agg.shape[0]))
+    ax.set_xticklabels([i for i in df_agg.index.astype(int)])
     ax.tick_params(labelsize=6)
     fig.tight_layout()
     fig.savefig(f"{model_directory}/topic_recovery.png", dpi=100)
     plt.close(fig)
+    ## Save
+    df_agg.to_csv(f"{model_directory}/topic_recovery.csv",index=True)
+    ## Vocabulary Evolution
+    if isinstance(model, DTM) or isinstance(model, IDTM):
+        print("Generating Evolution Plots for {} Model".format(model_type.upper()))
+        _ = plot_evolution(model, model_type)
+    ## Trace Plots
+    print("Generating Trace Plots for {} Model".format(model_type.upper()))
+    mmin = 0
+    if isinstance(model, IDTM):
+        mmin = int(model.m.sum() * 0.0001)
+    _ = plot_traces(model, model_type, random_seed=42, min_component_support=mmin)
 
 ###################
 ### Execute

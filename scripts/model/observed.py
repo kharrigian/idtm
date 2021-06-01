@@ -24,23 +24,23 @@ MODEL_TYPE = "idtm"
 CHECKPOINT_FREQUENCY = None
 MODEL_PARAMS = {
 
-    # "initial_k":100,
+    # "initial_k":20,
+    # "rm_top":0,
+    # "alpha":0.1,
+    # "eta":0.1,
+    # "cache_rate":100,
+    # "cache_params":set(["phi"]),
+    # "n_iter":10000,
+
+    # "k":20,
     # "rm_top":0,
     # "alpha":0.1,
     # "eta":0.1,
     # "cache_rate":1,
     # "cache_params":set(["alpha","phi","theta"]),
-    # "n_iter":5000,
+    # "n_iter":20000,
 
-    # "k":100,
-    # "rm_top":0,
-    # "alpha":0.1,
-    # "eta":0.1,
-    # "cache_rate":1,
-    # "cache_params":set(["alpha","phi","theta"]),
-    # "n_iter":5000,
-
-    # "k":100,
+    # "k":20,
     # "rm_top":0,
     # "alpha_var":0.1,
     # "eta_var":0.1,
@@ -54,8 +54,8 @@ MODEL_PARAMS = {
     "alpha_0_b":10,
     "gamma_0_a":1,
     "gamma_0_b":10,
-    "sigma_0":1,
-    "rho_0":1,
+    "sigma_0":4,
+    "rho_0":1e-1,
     "q":5,
     "q_dim":4,
     "q_var":1e-1,
@@ -65,12 +65,12 @@ MODEL_PARAMS = {
     "gamma_filter":1,
     "n_filter":5,
     "token_sample_rate":None,
-    "batch_size":None,
+    "batch_size":250,
     "delta":4,
     "lambda_0":1000,
     "cache_rate":1,
     "cache_params":set(["alpha","phi","acceptance"]),
-    "n_iter":50,
+    "n_iter":1,
 
     "n_burn":1,
     "jobs":8,
@@ -115,7 +115,7 @@ from smtm.util.helpers import make_directory, chunks
 #####################
 
 ## Experiment Output Directory
-OUTPUT_DIR = f"./data/results/observed-v2/{MODEL_TYPE}/"
+OUTPUT_DIR = f"./data/results/observed/{MODEL_TYPE}/"
 
 ## Model Classes
 MODELS = {
