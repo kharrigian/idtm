@@ -449,7 +449,11 @@ emoticon = regex_or(
 )
 
 ## Emojis
-emojis_list = map(lambda x: ''.join(x.split()), emoji.UNICODE_EMOJI.keys())
+if "en" in emoji.UNICODE_EMOJI.keys():
+    EMOJI_DICT = emoji.UNICODE_EMOJI["en"]
+else:
+    EMOJI_DICT = emoji.UNICODE_EMOJI
+emojis_list = map(lambda x: ''.join(x.split()), EMOJI_DICT.keys())
 emoji_r = re.compile('|'.join(re.escape(p) for p in emojis_list))
 
 ## Hashtags and at mentions
@@ -1020,7 +1024,7 @@ class Tokenizer(object):
         Returns:
             tokens (list): List of tokens, with emoji groups split separately
         """
-        tokens = list(map(lambda t: split_emojis(t) if any(char in emoji.UNICODE_EMOJI for char in t) else [t], tokens))
+        tokens = list(map(lambda t: split_emojis(t) if any(char in EMOJI_DICT for char in t) else [t], tokens))
         tokens = flatten(tokens)
         return tokens
     
@@ -1035,7 +1039,7 @@ class Tokenizer(object):
         Returns:
             tokens (list): Token list without any emojis
         """
-        tokens = list(filter(lambda t: t not in emoji.UNICODE_EMOJI, tokens))
+        tokens = list(filter(lambda t: t not in EMOJI_DICT, tokens))
         return tokens
     
     def _replace_emojis(self,
@@ -1049,7 +1053,7 @@ class Tokenizer(object):
         Returns:
             tokens (list): Tokens with emojis replace with generic string
         """
-        tokens = list(map(lambda t: "<EMOJI>" if t in emoji.UNICODE_EMOJI else t, tokens))
+        tokens = list(map(lambda t: "<EMOJI>" if t in EMOJI_DICT else t, tokens))
         return tokens
 
     def tokenize(self,
